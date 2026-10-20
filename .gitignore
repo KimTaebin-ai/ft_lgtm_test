@@ -1,0 +1,16 @@
+# build outputs
+bin/
+dist/
+node_modules/
+*.wasm
+
+# local env / secrets
+.env
+*.local.yaml
+kubeconfig*
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
