@@ -58,7 +58,7 @@ for d in backend frontend k8s dashboards scripts/verify; do
 	[ -d "$d" ] && pass "dir $d" || fail "dir $d 없음"
 done
 for d in backend frontend k8s dashboards; do
-	[ -e "$d/.gitkeep" ] || [ -n "$(ls -A "$d" 2>/dev/null | grep -v '^\.gitkeep$')" ] && pass "$d/.gitkeep" || fail "$d/.gitkeep 없음"
+	if [ -e "$d/.gitkeep" ]; then pass "$d/.gitkeep"; else fail "$d/.gitkeep 없음"; fi
 done
 for f in .gitignore HANDOFF.md Makefile; do
 	[ -f "$f" ] && pass "file $f" || fail "file $f 없음"
