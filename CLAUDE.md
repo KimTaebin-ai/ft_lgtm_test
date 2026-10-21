@@ -21,7 +21,9 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 실패하는 검증 (scripts/verify/<피처>.sh 또는 테스트)을 먼저 커밋 → 구현
 - 완료 시 검증표 (주장 / 확인 방법 / 결과). 실제로 실행한 명령과 출력만 "확인됨"
 - HANDOFF.md 맨 위에 피처 블록 추가: 한 일 / 된 것 / 안 된 것 / 다음 단계
-- git push, gh pr create는 명령만 보여주고 멈춘다
+- 커밋 후 git push는 실행. gh pr create --draft는 명령만 출력하고 멈춘다
+- 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). VM 검증: rsync -a --delete --exclude .git ./ lgtm-vm:~/lgtm/ 후 ssh 실행. macOS 실행 결과는 검증으로 치지 않는다
+- 버전·기본값·API는 WebFetch나 실제 명령 출력으로 확인한 값만 쓴다
 
 ## 금지
 
