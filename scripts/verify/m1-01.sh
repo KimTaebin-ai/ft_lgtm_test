@@ -58,12 +58,12 @@ pf_start() {
 http_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" 2>/dev/null; }
 
 # ---- 1. pod / PVC / resources / readinessProbe ----
-pods="$(k -n "$NS" get pods --no-headers 2>&1)"
+pods="$(k -n "$NS" get pods -l 'app in (mimir,loki,tempo)' --no-headers 2>&1)"
 n="$(printf '%s\n' "$pods" | grep -c .)"
-notready="$(k -n "$NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' 2>/dev/null | grep -v '=True$')"
+notready="$(k -n "$NS" get pods -l 'app in (mimir,loki,tempo)' -o jsonpath='{range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' 2>/dev/null | grep -v '=True$')"
 if [ "$n" -eq 3 ] && [ -z "$notready" ]; then pass "namespace $NS pod 3개 Ready"; else fail "pod 3개 Ready 아님 (pod ${n}개, Ready 아님: ${notready:-없음}): $pods"; fi
 
-res="$(k -n "$NS" get pods -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.name}{"|"}{.resources.requests.cpu}{"|"}{.resources.requests.memory}{"|"}{.resources.limits.cpu}{"|"}{.resources.limits.memory}{"\n"}{end}{end}' 2>&1)"
+res="$(k -n "$NS" get pods -l 'app in (mimir,loki,tempo)' -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.name}{"|"}{.resources.requests.cpu}{"|"}{.resources.requests.memory}{"|"}{.resources.limits.cpu}{"|"}{.resources.limits.memory}{"\n"}{end}{end}' 2>&1)"
 rn="$(printf '%s\n' "$res" | grep -c .)"
 bad="$(printf '%s\n' "$res" | grep . | awk -F'|' 'NF != 5 || $2=="" || $3=="" || $4=="" || $5==""')"
 if [ "$rn" -ge 3 ] && [ -z "$bad" ]; then pass "컨테이너 $rn개 모두 resources request/limit 지정"; else fail "resources 누락 (컨테이너 ${rn}개): $bad"; fi
@@ -160,8 +160,9 @@ mt="$(printf '%s\n' "$cfg" | awk '/^multitenancy_enabled:/ {print $2; exit}')"
 [ "$mt" = "false" ] && pass "Mimir /config multitenancy_enabled=false" || fail "Mimir multitenancy_enabled='${mt:-없음}'"
 
 # ---- 6. 외부 노출 없음 ----
-ing_n="$(k -n "$NS" get ingress --no-headers 2>/dev/null | grep -c .)"
-[ "$ing_n" -eq 0 ] && pass "namespace $NS 에 Ingress 없음" || fail "namespace $NS 에 Ingress ${ing_n}개"
+# F-M1-02 부터 같은 namespace 에 Grafana Ingress 가 있다. backend 3종을 가리키는 Ingress 만 센다
+ing_n="$(k -n "$NS" get ingress -o jsonpath='{range .items[*]}{range .spec.rules[*].http.paths[*]}{.backend.service.name}{"\n"}{end}{end}' 2>/dev/null | grep -cE '^(mimir|loki|tempo)$')"
+[ "$ing_n" -eq 0 ] && pass "mimir/loki/tempo 를 가리키는 Ingress 없음" || fail "backend 를 가리키는 Ingress ${ing_n}개"
 
 # ---- 7. pod 재기동 후에도 /ready 200, PVC 데이터 유지 ----
 pf_stop

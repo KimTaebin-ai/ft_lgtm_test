@@ -32,14 +32,29 @@ build:
 	@echo "TODO F-M1-03"
 
 # observability → dummy 순서. 이후 ipfs, app 이 이어진다. 대기는 readinessProbe + rollout status
+# Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
+# dashboards ConfigMap 은 dashboards/*.json 에서 만든다 (0개면 빈 ConfigMap)
+# dummy-grafana 는 apply 가 prune 하지 않으므로 명시적으로 지운다 (기존 클러스터 대응)
 deploy:
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/observability/00-namespace.yaml
+	@kubectl --context k3d-$(CLUSTER_NAME) -n observability get secret grafana-admin >/dev/null 2>&1 || \
+		kubectl --context k3d-$(CLUSTER_NAME) -n observability create secret generic grafana-admin \
+			--from-literal=admin-user=admin \
+			--from-literal=admin-password="$$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >/dev/null
+	@kubectl --context k3d-$(CLUSTER_NAME) -n observability create configmap grafana-dashboards \
+		$$(for f in dashboards/*.json; do [ -e "$$f" ] && printf -- '--from-file=%s ' "$$f"; done) \
+		--dry-run=client -o yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/observability/
 	@for s in mimir loki tempo; do \
 		kubectl --context k3d-$(CLUSTER_NAME) -n observability rollout status statefulset/$$s --timeout=300s || exit 1; \
 	done
+	@for d in otel-collector grafana; do \
+		kubectl --context k3d-$(CLUSTER_NAME) -n observability rollout status deploy/$$d --timeout=300s || exit 1; \
+	done
+	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-grafana --ignore-not-found
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/dummy/
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy wait --for=condition=Available deploy --all --timeout=120s
-	@bash scripts/wait-ingress.sh 60 lgtm.local grafana.lgtm.local ipfs.lgtm.local
+	@bash scripts/wait-ingress.sh 60 lgtm.local grafana.lgtm.local/api/health ipfs.lgtm.local
 
 hosts:
 	@bash scripts/hosts.sh

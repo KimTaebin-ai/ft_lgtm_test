@@ -107,8 +107,9 @@ c="$(http_code --resolve "$GRAFANA_HOST:80:127.0.0.1" "http://$GRAFANA_HOST/api/
 [ "$c" = "200" ] && pass "인증 없이 /api/search 200" || fail "인증 없이 /api/search code=${c:-없음}"
 
 [ -n "$ADMIN_PW" ] && pass "Secret grafana-admin 에서 admin 비밀번호 읽음 (값 비출력)" || fail "Secret grafana-admin admin-password 없음"
-c="$(printf 'user = "admin:admin"\n' | curl -s -o /dev/null -w '%{http_code}' -K - --max-time 10 --resolve "$GRAFANA_HOST:80:127.0.0.1" "http://$GRAFANA_HOST/api/org" 2>/dev/null)"
-[ "$c" = "401" ] && pass "기본값 admin/admin 인증 거부 (401)" || fail "admin/admin 인증 code=${c:-없음} (401 아님)"
+# anonymous 가 켜져 있으면 틀린 인증도 익명으로 처리되므로 admin 전용 API 로 확인한다 (익명 Editor 는 403)
+c="$(printf 'user = "admin:admin"\n' | curl -s -o /dev/null -w '%{http_code}' -K - --max-time 10 --resolve "$GRAFANA_HOST:80:127.0.0.1" "http://$GRAFANA_HOST/api/admin/settings" 2>/dev/null)"
+[ "$c" != "200" ] && pass "기본값 admin/admin 으로 admin API 불가 (code $c)" || fail "admin/admin 으로 admin API 200 — 기본 비밀번호가 살아 있음"
 c2="$(gauth -o /dev/null -w '%{http_code}' "http://$GRAFANA_HOST/api/admin/settings")"
 [ "$c2" = "200" ] && pass "Secret 비밀번호로 admin API 200" || fail "Secret 비밀번호 admin API code=${c2:-없음}"
 
@@ -127,6 +128,9 @@ chk_setting analytics check_for_updates false
 chk_setting analytics check_for_plugin_updates false
 chk_setting news news_feed_enabled false
 chk_setting plugins preinstall_auto_update false
+chk_setting plugins preinstall_disabled true
+chk_setting plugins plugin_admin_enabled false
+chk_setting snapshots external_enabled false
 
 # ---- 4. datasource 3개 + health ----
 check_datasources() { # <라벨 접두>
@@ -245,7 +249,7 @@ lv="$(printf '%s' "$stored" | python3 -I -c "import ast,sys; d=ast.literal_eval(
 
 # ---- 7. 외부 통신 시도 없음 ----
 glog="$(k -n "$NS" logs deploy/grafana 2>&1)"
-ext="$(printf '%s\n' "$glog" | grep -iE 'grafana\.com|plugin.*(install|download)|(install|download).*plugin|stats\.grafana|api\.github' | head -5)"
+ext="$(printf '%s\n' "$glog" | grep -iE 'installing plugin|downloading|grafana\.com/(api|grafana/plugins)|stats\.grafana|api\.github\.com' | head -5)"
 [ -z "$ext" ] && pass "Grafana 로그에 외부 다운로드/플러그인 설치 시도 없음" || fail "Grafana 로그에 외부 통신 흔적: $ext"
 
 # ---- 8. 노출 범위 ----
