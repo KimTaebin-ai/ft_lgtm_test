@@ -31,8 +31,12 @@ cluster:
 build:
 	@echo "TODO F-M1-03"
 
-# 더미 페이지만 적용한다. 실제 deploy(observability → ipfs → app)는 F-M1-01부터
+# observability → dummy 순서. 이후 ipfs, app 이 이어진다. 대기는 readinessProbe + rollout status
 deploy:
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/observability/
+	@for s in mimir loki tempo; do \
+		kubectl --context k3d-$(CLUSTER_NAME) -n observability rollout status statefulset/$$s --timeout=300s || exit 1; \
+	done
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/dummy/
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy wait --for=condition=Available deploy --all --timeout=120s
 	@bash scripts/wait-ingress.sh 60 lgtm.local grafana.lgtm.local ipfs.lgtm.local

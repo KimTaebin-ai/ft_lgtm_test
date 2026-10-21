@@ -10,6 +10,63 @@
 ### 다음 단계
 -->
 
+## F-M1-01 obs-backends (브랜치 feat/m1-01-obs-backends)
+
+### 한 일
+- `k8s/observability/`: namespace + Mimir/Loki/Tempo 각각 ConfigMap + StatefulSet(1) + ClusterIP Service + PVC(local-path). Ingress 없음. 모든 컨테이너 request/limit, `readinessProbe httpGet /ready`
+- 이미지(확인일 2026-10-21, amd64/arm64 모두 Docker Hub 태그 API로 확인): `grafana/mimir:3.2.2`, `grafana/tempo:3.1.0`, `grafana/loki:3.7.9`. 버전은 각 GitHub `releases/latest`로 확인
+- `make deploy`: `k8s/observability/` apply → `rollout status statefulset/{mimir,loki,tempo}`(readinessProbe 기반, port-forward 안 씀) → `k8s/dummy/` apply → 기존 dummy 대기
+- `scripts/verify/m1-01.sh` (실패 상태로 먼저 커밋, 구현 전 VM에서 5건 실패 확인). port-forward는 verify 안에서만 사용, trap으로 정리
+
+### 확정 결정과 이유
+- 배포: 셋 다 raw manifest. Mimir 공식 chart가 distributed 위주라 monolithic에 맞지 않고, 세 백엔드의 방식을 통일하기 위해
+- Collector→Mimir: `prometheusremotewrite` (`/api/v1/push`). Collector→Loki: `otlphttp` (`/otlp`). Collector 자체는 F-M1-02. (OTLP→Mimir 경로의 exemplar 전달은 확인하지 않았고 F-M1-04에서 실측)
+- Mimir classic: 3.x에서 `ingest_storage.enabled` 기본값은 false이고 켜려면 명시해야 한다(https://grafana.com/docs/mimir/v3.2.x/configure/configuration-parameters/). 문서는 ingest storage를 "preferred"라 하지만 monolithic 설명(https://grafana.com/docs/mimir/v3.2.x/references/architecture/deployment-modes/)에는 언급이 없다. 그래서 `ingest_storage.enabled: false`를 명시했고 `/config`로 반영을 확인
+- `max_global_exemplars_per_user` 기본값 0(비활성, experimental)이라 100000으로 설정. `/config`에서 반영 확인
+- Tempo 3.x: ingester/compactor 블록 제거, monolithic은 Kafka 불필요(https://grafana.com/docs/tempo/v3.1.x/set-up-for-tracing/setup-tempo/migrate-to-3/). metrics-generator/local_blocks는 설정하지 않음(F-M5-03에서 이 문서 기준으로 다시 확인)
+- Loki: schema v13 + tsdb, `allow_structured_metadata: true`, OTLP는 `/otlp/v1/logs`. 성공 응답은 200이 아니라 **204**
+
+### Mimir ruler/alertmanager 스토리지 문제 (기록)
+- 증상: Mimir CrashLoop, `module=ruler err="unable to read dir /data/ruler: open /data/ruler: no such file or directory"`. 이전에 `activity-tracker`도 `./metrics-activity.log` permission denied로 실패 → `activity_tracker.filepath: /data/metrics-activity.log`
+- 확인: `docker run --rm --entrypoint /bin/mimir grafana/mimir:3.2.2 -modules` 에서 `ruler (in: all)`, `alertmanager`는 all에 포함되지 않음. 그래서 alertmanager 설정은 넣지 않았다
+- 선택: `ruler_storage.backend: filesystem`, `dir: /data/ruler`(PVC 안). 이유: backend `local`은 디렉터리가 없으면 시작이 실패하고, `filesystem`(object store 방식)은 디렉터리 없이도 시작되는 것을 VM에서 확인(수정 후 `logs | grep level=error` 0건). rule/alert 기능은 쓰지 않는다
+- 대안(끄는 방법): `-target=all` 대신 모듈을 나열하면 ruler를 뺄 수 있다. `-modules` 출력 기준이며 모듈 제외 문법(`-ruler`)은 문서에서 확인하지 못했다. emptyDir를 `/data/ruler`에 마운트하는 방법도 있으나 시도하지 않았다
+- ring: `/config` 확인 결과 기본값 memberlist였던 것 중 `-target=all`에서 실제로 쓰는 ruler/query_scheduler/querier ring을 포함해 distributor/ingester/store_gateway/compactor ring을 inmemory로 설정. 남은 memberlist는 `distributor.ha_tracker`(비활성), `ingester.partition_ring`(ingest storage용), alertmanager, usage_tracker, overrides_exporter로 이 구성에서 쓰이지 않는 항목
+
+### 검증표
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| verify가 구현 전에 실패 | VM `bash scripts/verify/m1-01.sh` | 확인(VM): 5건 실패, exit 1 |
+| pod 3개 Ready, 컨테이너 3개 request/limit, readinessProbe /ready, PVC 3개 Bound | verify | 확인(VM) |
+| 세 백엔드 /ready 200 | verify (port-forward) | 확인(VM) |
+| Tempo OTLP 1건 전송 → `/api/traces/<id>` 조회 | verify | 확인(VM) |
+| Loki OTLP 로그 1건 전송 → `query_range` 조회, `\| trace_id="..."` structured metadata 필터로 조회 | verify | 확인(VM) |
+| Mimir `/api/v1/push` 404 아님 | verify (빈 body로 400) | 확인(VM) |
+| exemplar 설정 반영 | verify (`/config` max_global_exemplars_per_user=100000) | 확인(VM) |
+| ingest storage 꺼짐, multitenancy 꺼짐 | verify (`/config`) | 확인(VM) |
+| pod 3개 delete 후 재기동, /ready 200, 기존 trace/log 재조회(PVC 유지) | verify | 확인(VM) |
+| Ingress 없음 | verify | 확인(VM) |
+| `make clean && make` → exit 0, 재실행 exit 0, 그 뒤 verify exit 0 | VM | 확인(VM) |
+| 로그 `level=error`: mimir 0, tempo 0, loki 1(`ratestore ... empty ring`, 기동 직후 1회) | VM `kubectl logs` | 확인(VM) |
+| `bash -n`, shellcheck(warning 이상) | mac | 확인(mac 정적) |
+| amd64 VM에서의 기동 | - | 미확인 (검증 VM은 aarch64) |
+| OTLP→Mimir 경로의 exemplar 전달 | - | 미확인 (F-M1-04) |
+| Tempo 3.1.0 monolithic에서 compaction 등 장기 동작 | - | 미확인 (기동 직후 `backend scheduler no jobs found` 경고/에러가 보였던 적이 있으나 최종 로그에서는 0건) |
+
+### 실측 (VM, 기동 후 verify 직후)
+`kubectl top pod -n observability`: loki-0 42Mi / mimir-0 59Mi / tempo-0 29Mi (CPU 4~6m). 부하 없는 상태의 값이다.
+노드 allocatable (`kubectl describe node`): cpu 4, memory 8121856Ki (약 7.75Gi). 배포 후 Allocated: requests cpu 430m / memory 828Mi, limits cpu 2300m / memory 2314Mi (dummy와 k3s 시스템 pod 포함).
+request: mimir 100m/256Mi, loki 50m/192Mi, tempo 50m/192Mi (limit: mimir 1Gi, 나머지 512Mi). 이후 compiler는 request 256Mi / limit 1Gi 예정. 이 값으로 예산 부족 여부는 판단하지 않았다.
+
+### 안 된 것
+- verify는 한 번 수정했다: Loki OTLP 성공 코드(204), 재기동 직후 첫 연결 실패에 대한 재시도, port-forward 포트 전체 대기. 검사 기준을 완화한 것이 아니라 기대값/타이밍 오류 수정이다
+- 부하 상태 RAM 미측정
+
+### 다음 단계
+- F-M1-02: tracesToLogs는 customQuery로 structured metadata 필터 (`| trace_id="${__trace.traceId}" | span_id="${__span.spanId}"`). Loki에서 `| trace_id="..."` 필터가 동작함은 이번에 확인
+- F-M1-02: Collector → Mimir `prometheusremotewrite` `http://mimir.observability:8080/api/v1/push`(send_exemplars/resource_to_telemetry 등은 버전 문서로 확인), Collector → Loki `otlphttp` `http://loki.observability:3100/otlp`, Collector → Tempo `otlp` `tempo.observability:4317`
+- F-M1-02: Grafana datasource는 provisioning. multitenancy 꺼짐이라 X-Scope-OrgId 불필요
+
 ## F-M0-02 cluster-ingress-hosts (브랜치 feat/m0-02-cluster-ingress-hosts)
 
 ### 한 일
