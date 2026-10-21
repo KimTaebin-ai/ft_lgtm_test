@@ -10,6 +10,60 @@
 ### 다음 단계
 -->
 
+## F-M1-03 backend-skeleton (브랜치 feat/m1-03-backend-skeleton)
+
+### 한 일
+- `backend/` Go 모듈 `lgtm/backend` (Go **1.27.3**). `cmd/api`(서버, SIGTERM → `http.Server.Shutdown` → provider Shutdown으로 flush), `internal/telemetry`(Tracer/Logger provider, slog fan-out), `internal/execute`(stub). F-M2-01 compiler는 `backend/cmd/compiler`로 같은 모듈에 추가
+- `GET /healthz`(계측·로그 없음, Ingress 미노출), `POST /api/execute` stub: compile 20~40ms / execute 10~30ms / ipfs.upload 50~100ms sleep, cid는 `bafy`+코드 sha256 앞 52자의 **가짜 값**. 트리거: `__fail_compile__`(status compile_error), `__slow__`(합계 2~3초). 400 invalid_request(JSON 오류, language≠rust, 빈 code)만 처리. **64KB 413 / 429는 F-M2-04 전까지 없음 → 본문 크기 무제한**
+- Tracing: root span 이름은 `execute.RootSpanName`(`"POST /api/execute"`)을 `otelhttp.WithSpanNameFormatter`로 고정. 자식 `compile`(Client) / `execute` / `ipfs.upload`. attribute `code.sha256`, `code.language`, `code.size_bytes`(root), `ipfs.cid`(ipfs.upload + root). 실패 시 해당 span과 root에 `RecordError`(exception event) + `SetStatus(Error)`. W3C TraceContext propagator 등록. OTLP gRPC `otel-collector.observability:4317`(env `OTLP_ENDPOINT`로 변경 가능), `service.name=lgtm-backend`
+- Logs: `slog.NewMultiHandler(otelslog, JSON stdout)`. JSON 쪽은 `ctxHandler`가 `trace_id`/`span_id`를 최상위에 넣고, `WithAttrs`/`WithGroup`도 래퍼를 유지(그룹이 열려 있으면 root에 trace attr을 먼저 붙여 재구성). 모든 로그는 `*Context(ctx, …)`. 각 단계 span 안에서 최소 1줄
+- 이미지/배포: `backend/Dockerfile`(multi-stage, `RUN --mount=type=cache`로 go mod/build 캐시, non-root 65532). `k8s/app/`(ns `lgtm`, Deployment+Service+Ingress `lgtm.local` `/api` Prefix). `make build` = `scripts/build.sh`(없으면 docker build → `k3d image import`), `make deploy`가 `__BACKEND_IMAGE__` 치환 후 apply + rollout + `scripts/wait-backend.sh`
+- `scripts/verify/m1-03.sh` (실패 상태로 먼저 커밋: VM에서 39건 실패)
+
+### 확정 결정과 이유
+- **이미지 태그 = 소스 content hash** `lgtm-backend:src-<12자>` (`scripts/image-tag.sh`: `backend/` 전 파일 경로+내용 sha256). VM에 .git이 없고, 시간 태그는 make 재실행마다 이미지가 바뀌어 idempotent 위반. 같은 소스는 같은 태그(build skip, deploy 변화 없음), 소스가 바뀌면 태그가 바뀌어 Deployment가 롤링 교체됨. `:latest` 없음, `imagePullPolicy: IfNotPresent`. 이전 태그는 docker host에서만 정리, **k3d 노드 containerd에는 남음**
+- **base 이미지**: 빌드 `golang:1.27.3-trixie`, 런타임 `debian:trixie-20261020-slim`(날짜 태그 고정). F-M2-03에서 wasmtime-go(cgo, glibc 링크)로 바뀔 때 base 교체가 없도록 alpine(musl)/distroless-static을 피하고 VM과 같은 Debian 13 glibc로 맞춤. 지금은 `CGO_ENABLED=0` 정적 빌드
+- 6.2 해석: 성공/실패 모두 같은 응답 구조체(모든 필드 항상 포함, `message`만 omitempty). `__fail_compile__`은 compile 실패 → execute 생략 → ipfs.upload 수행 → trace는 span **3개**(성공은 4개)
+- 버전 (go.mod에서 확인): otel / sdk / trace / otlptracegrpc **v1.47.0**, otel/log·sdk/log **v1.47.0**, otlploggrpc **v0.23.0**, contrib otelslog **v0.21.0**, otelhttp **v0.72.0**, grpc v1.83.2. 근거 URL: https://go.dev/dl/?mode=json, https://pkg.go.dev/log/slog (`NewMultiHandler`, Go 1.26.0 추가), pkg.go.dev 각 모듈 versions 탭, Docker Hub debian `trixie-20261020-slim`
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make clean && make` exit 0, 재실행 exit 0 | VM 실행 (`make1=0 make2=0`) | 확인(VM) |
+| backend pod Ready, request/limit, 이미지 태그 고정, IfNotPresent | `m1-03.sh` | 확인(VM) |
+| `POST /api/execute` 200 + 6.2 필드 전부 | `m1-03.sh` | 확인(VM) |
+| Tempo: span 4개, root 이름 `POST /api/execute`, 자식 parent=root, TR-03 attribute | `m1-03.sh` | 확인(VM) |
+| Loki `{service_name="lgtm-backend"} \| trace_id=` ≥1, 3개 자식 span 각각 `\| span_id=` ≥1 | `m1-03.sh` | 확인(VM) |
+| kubectl logs JSON에 같은 trace_id + span_id | `m1-03.sh` | 확인(VM) |
+| `__fail_compile__`: compile_error, compile·root ERROR, event 존재, span 3개 | `m1-03.sh` | 확인(VM) |
+| `__slow__` 2~3.5초 | `m1-03.sh` | 확인(VM) |
+| `lgtm.local /` 와 `/healthz` 본문이 dummy 텍스트 (healthz가 backend로 안 감) | `m1-03.sh` | 확인(VM) |
+| m1-01, m1-02 여전히 통과 | `m1-03.sh` 내부 호출 | 확인(VM) |
+| 코드 수정 → `make build && make deploy` → 새 태그(`9d3f…`→`55ff…`)로 교체, 응답에 변경 반영, 무변경 재실행은 build skip | VM 실행 | 확인(VM) |
+| ctxHandler가 `With`/`WithGroup` 조합에서도 trace_id를 최상위에 유지, MultiHandler fan-out | `go test` 단위 테스트 | 확인(mac 정적). VM 실행 안 함 |
+| stub 스키마/span 구성/트리거/400 | `go test` | 확인(mac 정적) |
+| Grafana Explore에서 trace → "Logs for this span" 클릭 이동 | — | **미확인** (아래 수동 절차) |
+| OTLP exporter 실패(Collector 다운) 시 동작 | — | 미확인 |
+| amd64 | — | 미확인 (VM은 aarch64) |
+
+실측: `kubectl top pod -n lgtm` backend 1m / 19Mi (limit 200m/128Mi), 유휴.
+
+### 수동 확인 절차 (VM 브라우저, 1회)
+1. Firefox로 `http://grafana.lgtm.local` → Explore → datasource **Tempo** → Query type **TraceQL**(또는 TraceID) → trace ID 입력:
+   - 성공 trace: `256307ecde8dcf0cbb06e80f26395ea8`
+   - compile_error trace: `22c80413bfa70173357abb2044990bce`
+   (없으면 `curl -s -X POST --resolve lgtm.local:80:127.0.0.1 -d '{"language":"rust","code":"fn main(){}"}' http://lgtm.local/api/execute` 로 새로 만들고 응답의 `trace_id` 사용)
+2. span 목록에서 `compile` 등 자식 span 클릭 → 상세 패널의 **Logs for this span** 버튼 클릭 → Loki 쿼리 `{service_name=~".+"} | trace_id="…" | span_id="…"` 로 이동하고 로그가 1줄 이상 나오는지 확인
+3. compile_error trace에서는 compile / root span이 ERROR로 표시되고 exception event가 보이는지 확인
+(m1-02에서 provisioned 쿼리를 Loki API로 직접 실행하는 검증은 통과. 버튼 클릭 자체만 미확인.)
+
+### 안 된 것
+- metrics/exemplar (F-M1-04), 실제 compile/실행/IPFS, 413/429 (F-M2-04), compiler pod, frontend
+- k3d 노드 containerd의 오래된 `lgtm-backend:src-*` 이미지 정리
+
+### 다음 단계
+- **F-M1-04 metrics-exemplar**: `lgtm_execution_duration` histogram + exemplar(trace_id), counter. stub 트리거(`__slow__`, `__fail_compile__`)로 느린/실패 trace 생성. Mimir에 저장된 실제 metric 이름은 조회로 확정. m1-02 HANDOFF의 `service.name → job` label 변환 확인 결과 참고
+
 ## F-M1-02 collector-grafana (브랜치 feat/m1-02-collector-grafana)
 
 ### 한 일
