@@ -1,0 +1,173 @@
+# F-M1-02 Grafana. 상태는 전부 provisioning 이 소유한다 (PVC 없음, 재시작해도 동일).
+# 접근: anonymous Editor. Viewer 는 Explore 접근이 막혀 trace-to-logs 가 깨질 수 있다 (PRD 14장 해소).
+# admin 비밀번호는 make deploy 가 만든 Secret grafana-admin 에서 주입한다 (기본값 admin/admin 금지).
+# 외부 통신 차단 키는 grafana 13.2.4 defaults.ini 로 확인. `$$` 는 provisioning 의 `$` 이스케이프.
+# 근거: https://grafana.com/docs/grafana/v13.2/datasources/tempo/configure-tempo-data-source/provision/
+#       https://grafana.com/docs/grafana/v13.2/datasources/tempo/configure-tempo-data-source/ (변수 표)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-datasources
+  namespace: observability
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Mimir
+        uid: mimir
+        type: prometheus
+        access: proxy
+        url: http://mimir.observability:8080/prometheus
+        isDefault: true
+        editable: false
+        jsonData:
+          prometheusType: Mimir
+          httpMethod: POST
+          exemplarTraceIdDestinations:
+            - name: trace_id
+              datasourceUid: tempo
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo.observability:3200
+        editable: false
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: '-1h'
+            spanEndTimeShift: '1h'
+            filterByTraceID: false
+            filterBySpanID: false
+            customQuery: true
+            query: '{service_name=~".+"} | trace_id="$${__trace.traceId}" | span_id="$${__span.spanId}"'
+          tracesToMetrics:
+            datasourceUid: mimir
+            spanStartTimeShift: '-1h'
+            spanEndTimeShift: '1h'
+            tags:
+              - key: service.name
+                value: job
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.observability:3100
+        editable: false
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - name: trace_id
+              matcherType: label
+              matcherRegex: trace_id
+              datasourceUid: tempo
+              url: '$${__value.raw}'
+              urlDisplayLabel: View trace
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning-dashboards
+  namespace: observability
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: lgtm
+        orgId: 1
+        type: file
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: observability
+  labels: {app: grafana}
+spec:
+  selector: {app: grafana}
+  ports:
+    - {name: http, port: 3000, targetPort: 3000}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: observability
+  labels: {app: grafana}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      securityContext:
+        runAsUser: 472
+        runAsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.2.4
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-user}}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: grafana-admin, key: admin-password}}
+            - {name: GF_SERVER_ROOT_URL, value: "http://grafana.lgtm.local/"}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_NAME, value: "Main Org."}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Editor"}
+            - {name: GF_AUTH_DISABLE_LOGIN_FORM, value: "true"}
+            # 외부 통신 차단
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_FEEDBACK_LINKS_ENABLED, value: "false"}
+            - {name: GF_NEWS_NEWS_FEED_ENABLED, value: "false"}
+            - {name: GF_SNAPSHOTS_EXTERNAL_ENABLED, value: "false"}
+            - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
+            - {name: GF_PLUGINS_PREINSTALL_AUTO_UPDATE, value: "false"}
+            - {name: GF_PLUGINS_PLUGIN_ADMIN_ENABLED, value: "false"}
+            - {name: GOMEMLIMIT, value: 400MiB}
+          ports:
+            - {name: http, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 36
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: ds, mountPath: /etc/grafana/provisioning/datasources}
+            - {name: dash-provider, mountPath: /etc/grafana/provisioning/dashboards}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards}
+      volumes:
+        - name: ds
+          configMap: {name: grafana-provisioning-datasources}
+        - name: dash-provider
+          configMap: {name: grafana-provisioning-dashboards}
+        - name: dashboards
+          configMap: {name: grafana-dashboards}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: grafana.lgtm.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: grafana, port: {number: 3000}}

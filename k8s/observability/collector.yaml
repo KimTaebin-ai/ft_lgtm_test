@@ -1,0 +1,109 @@
+# F-M1-02 OTel Collector (contrib). OTLP 수신 → Tempo(traces) / Mimir(metrics) / Loki(logs). 클러스터 내부 Service 만, Ingress 없음.
+# exporter 이름은 0.163.1 `otelcol-contrib components` 출력으로 확인 (otlp_grpc, otlp_http, prometheus_remote_write).
+# prometheus_remote_write 는 delta monotonic sum / histogram 을 버린다 → 앱 metric 은 cumulative 로 낼 것.
+# 근거: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.163.0/exporter/prometheusremotewriteexporter/README.md
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 200
+        spike_limit_mib: 50
+      batch: {}
+
+    exporters:
+      otlp_grpc/tempo:
+        endpoint: tempo.observability:4317
+        tls:
+          insecure: true
+      prometheus_remote_write/mimir:
+        http:
+          endpoint: http://mimir.observability:8080/api/v1/push
+      otlp_http/loki:
+        endpoint: http://loki.observability:3100/otlp
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_grpc/tempo]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus_remote_write/mimir]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/loki]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels: {app: otel-collector}
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: 4317}
+    - {name: otlp-http, port: 4318, targetPort: 4318}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels: {app: otel-collector}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: otel-collector}
+  template:
+    metadata:
+      labels: {app: otel-collector}
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.163.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/otelcol/config.yaml
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+            - {name: health, containerPort: 13133}
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}
