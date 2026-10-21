@@ -10,6 +10,65 @@
 ### 다음 단계
 -->
 
+## F-M1-02 collector-grafana (브랜치 feat/m1-02-collector-grafana)
+
+### 한 일
+- `k8s/observability/collector.yaml`: OTel Collector contrib `0.163.1` (Deployment 1, ClusterIP Service 4317/4318, Ingress 없음). receivers otlp(grpc/http), processors memory_limiter+batch, pipelines traces/metrics/logs, `health_check`(13133) → readiness/liveness. limit 500m/256Mi
+- exporter 이름은 `otelcol-contrib components`(VM, 0.163.1) 출력으로 확인: `otlp_grpc`(Tempo, `tempo.observability:4317`), `prometheus_remote_write`(Mimir `/api/v1/push`), `otlp_http`(Loki `/otlp`, `/v1/logs` 자동 부착). 구 이름 `otlp`/`otlphttp`/`prometheusremotewrite`는 deprecated alias라 쓰지 않음
+- `k8s/observability/grafana.yaml`: Grafana `13.2.4` (Deployment, PVC 없음, limit 500m/512Mi) + Ingress `grafana.lgtm.local` + provisioning ConfigMap 2개(datasources, dashboard provider). `k8s/dummy/grafana.yaml` 삭제
+- `make deploy`: Secret `grafana-admin`(없을 때만 랜덤 생성, 출력 안 함) → `dashboards/*.json`으로 ConfigMap `grafana-dashboards`(0개면 빈 것) → apply → rollout 대기 → 기존 클러스터의 `dummy-grafana` 삭제(`apply`는 prune 안 함; 실제로 구 dummy를 apply한 뒤 `make deploy`로 제거됨 확인)
+- `scripts/wait-ingress.sh`: `host[/path]` 인자 지원. grafana는 `/api/health` 200 기대
+- `scripts/verify/m1-02.sh` (실패 상태로 먼저 커밋: VM에서 28건 실패 확인)
+- `scripts/verify/m1-01.sh` 최소 수정: 같은 namespace에 Collector/Grafana가 생겨 "pod 3개", "Ingress 0개" 검사가 깨지므로 `app in (mimir,loki,tempo)` 라벨로 한정, Ingress는 backend 3종을 가리키는 것만 센다 (PRD 변경 아님, 검증 범위 조정)
+
+### 확정 결정과 이유
+- Grafana 접근: anonymous **Editor**. Viewer는 Explore 접근이 막혀 trace-to-logs가 깨질 수 있어서. 로그인 폼 숨김. admin은 랜덤 Secret (기본 admin/admin 금지). PRD 14장 해소. admin/admin 으로는 admin API 불가 (verify 확인; 익명 사용자의 정확한 응답 코드는 미확인)
+- 외부 통신 차단 (env `GF_<SECTION>_<KEY>`, 13.2.4 `defaults.ini`로 키 존재 확인, 적용값은 `/api/admin/settings`로 verify): analytics.reporting_enabled / check_for_updates / check_for_plugin_updates / feedback_links_enabled=false, news.news_feed_enabled=false, snapshots.external_enabled=false, plugins.preinstall_disabled=true, preinstall_auto_update=false, plugin_admin_enabled=false. (`preinstall_async` 키는 13.2.4에 없음)
+- tracesToLogsV2.query: `{service_name=~".+"} | trace_id="$${__trace.traceId}" | span_id="$${__span.spanId}"`. LogQL은 `{...}`로 시작해야 하므로 stream selector 포함. `$$`는 provisioning의 `$` 이스케이프
+- tracesToMetrics.tags: `service.name → job`. remote write 변환 후 `service.name`이 `job` label이 됨을 실측으로 확인(아래). queries는 비워둠 (spanmetrics는 F-M5-03)
+- Loki derivedFields: `matcherType: label`, `matcherRegex: trace_id` (structured metadata 기준, 로그 본문 regex 아님). provisioning 후 API 응답에 `matcherType: label`이 남는 것 확인
+- 근거 URL: https://grafana.com/docs/grafana/v13.2/datasources/tempo/configure-tempo-data-source/ (변수 `${__trace.traceId}`, `${__span.spanId}`), …/configure-tempo-data-source/provision/ (tracesToLogsV2/tracesToMetrics YAML, `$$` 이스케이프), …/datasources/prometheus/configure/ (exemplarTraceIdDestinations), …/datasources/loki/configure/ (derivedFields), …/administration/provisioning/ (dashboard provider). Collector: opentelemetry-collector-contrib v0.163.0 exporter README
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make clean && make` exit 0, 재실행 exit 0 | VM에서 실행, 재실행 `MAKE_RERUN_EXIT=0` | 확인(VM) |
+| collector/grafana Ready + request/limit | `scripts/verify/m1-02.sh` | 확인(VM) |
+| Collector `otelcol-contrib validate` 성공, 기동 로그 error 0 | m1-02 | 확인(VM) |
+| `/api/health` 200 (Ingress), 인증 없이 홈 200 / `/api/search` 200 | m1-02 | 확인(VM) |
+| admin/admin 불가, Secret 비밀번호로 admin API 200 | m1-02 | 확인(VM) |
+| 설정 적용값 (anonymous Editor, 외부 통신 차단 키) | `/api/admin/settings` | 확인(VM) |
+| datasource 3개(uid mimir/tempo/loki) 존재 + health OK | Grafana API | 확인(VM) |
+| exemplarTraceIdDestinations, tracesToLogsV2(customQuery, span_id), derivedFields(label) | datasource API JSON | 확인(VM) |
+| provisioned tracesToLogsV2.query를 trace/span id로 치환해 Loki query_range 실행 → 1건 | m1-02 | 확인(VM) |
+| Collector→Tempo / Loki(`\| trace_id=`) / Mimir smoke | m1-02 | 확인(VM) |
+| Mimir 저장 label 세트 (service.name=verify-m1-02 로 전송) | `/prometheus/api/v1/series` | 확인(VM): `{__name__="verify_m1_02_gauge", job="verify-m1-02", otel_scope_name="verify"}` |
+| Grafana 로그에 외부 다운로드/플러그인 설치 시도 없음 | 로그 grep | 확인(VM) |
+| Grafana pod 삭제 후 datasource 3개 유지, PVC 없음 | m1-02 | 확인(VM) |
+| m1-01 여전히 통과 | `scripts/verify/m1-01.sh` | 확인(VM) |
+| 구 `dummy-grafana`가 있는 클러스터에서 `make deploy`가 제거 | 구 manifest apply 후 deploy | 확인(VM) |
+| YAML/스크립트 문법 | `bash -n` (mac) | 확인(mac 정적) |
+| metric → trace → logs 클릭 이동, exemplar end-to-end | — | **미확인** (앱 없음, F-M1-04 범위) |
+| tracesToMetrics 링크 실제 렌더링 (queries 없음) | — | **미확인** (F-M5-03 spanmetrics 이후) |
+| amd64 | — | 미확인 (VM은 aarch64) |
+
+### 실측 (`kubectl top pod -n observability`, VM, 유휴, 재배포 직후 약 1~3분)
+| pod | CPU | MEM |
+|---|---|---|
+| grafana | 8m | 294Mi (limit 512Mi) |
+| otel-collector | 8m | 43Mi (limit 256Mi) |
+| loki-0 / mimir-0 / tempo-0 | 5m / 5m / 2m | 43Mi / 59Mi / 44Mi |
+| node k3d-lgtm-server-0 | 111m (2%) | 1835Mi (23%) |
+
+### 안 된 것
+- 클릭 이동(metric→trace→logs) 확인, Collector→Mimir exemplar 전달 실측: F-M1-04
+- tracesToMetrics `queries`, serviceMap, nodeGraph: 범위 밖
+- dashboard JSON: M5. provider만 설정됨 (`dashboards/` → ConfigMap → `/var/lib/grafana/dashboards`). 새 JSON 추가 후에는 `make deploy`를 다시 실행해야 ConfigMap이 갱신됨
+
+### 다음 단계
+- F-M1-03 backend-skeleton
+- Collector는 delta metric을 버리므로(prometheus_remote_write 문서) 앱 metric은 cumulative로 export할 것
+
 ## F-M1-01 obs-backends (브랜치 feat/m1-01-obs-backends)
 
 ### 한 일
