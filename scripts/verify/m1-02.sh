@@ -89,7 +89,9 @@ cv="$(k -n "$NS" exec deploy/otel-collector -- /otelcol-contrib validate --confi
 cv_rc=$?
 [ "$cv_rc" -eq 0 ] && pass "otelcol-contrib validate 성공" || fail "otelcol-contrib validate 실패: $cv"
 
-errn="$(k -n "$NS" logs deploy/otel-collector 2>&1 | grep -cE '"level":"error"|[[:space:]]error[[:space:]]|level=error')"
+# exporter 전송 실패("Exporting failed")는 제외한다: m1-01 이 mimir/loki/tempo 를 일부러 재시작하고,
+# F-M1-04 부터 backend 가 5초마다 metric 을 보내 재시작 구간의 전송 실패가 error 로 남는다 (기동/설정 오류가 아님)
+errn="$(k -n "$NS" logs deploy/otel-collector 2>&1 | grep -v 'Exporting failed' | grep -cE '"level":"error"|[[:space:]]error[[:space:]]|level=error')"
 [ "${errn:-0}" -eq 0 ] && pass "Collector 기동 로그 error 0건" || fail "Collector 로그 error ${errn}건"
 
 # ---- 3. Grafana health / anonymous ----
