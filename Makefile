@@ -21,7 +21,7 @@ export CLUSTER_NAME K3D_VERSION K3S_IMAGE KUBECTL_VERSION HELM_VERSION DOCKER_VE
 WITH_DOCKER := scripts/with-docker.sh
 
 .DEFAULT_GOAL := all
-.PHONY: all install cluster build deploy hosts status verify ipfs-check clean fclean re
+.PHONY: all install cluster build deploy hosts status verify verify-m1 ipfs-check clean fclean re
 
 all: install cluster build deploy hosts
 
@@ -74,6 +74,14 @@ status:
 
 verify:
 	@echo "TODO F-M6-02"
+
+# M1 검증: m1-01 ~ m1-04 순차 실행, 첫 실패에서 중단. VM(Linux)에서만 동작한다
+verify-m1:
+	@for s in m1-01 m1-02 m1-03 m1-04; do \
+		echo "==== verify $$s ===="; \
+		bash scripts/verify/$$s.sh || { echo "verify-m1 실패: $$s" >&2; exit 1; }; \
+	done
+	@echo "verify-m1: ALL PASS"
 
 ipfs-check:
 	@echo "TODO F-M3-03"

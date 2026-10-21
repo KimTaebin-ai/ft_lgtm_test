@@ -40,7 +40,7 @@ func run() error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider))
+	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics))
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

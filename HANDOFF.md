@@ -10,6 +10,61 @@
 ### 다음 단계
 -->
 
+## F-M1-04 metrics-exemplar (브랜치 feat/m1-04-metrics-exemplar)
+
+### 한 일
+- `telemetry.Setup`: `otlpmetricgrpc`(v1.47.0) + `PeriodicReader(WithInterval(5s))` → Collector. 같은 resource(`service.name=lgtm-backend`). Shutdown 순서 metric → log → trace
+- `telemetry/metrics.go`: instrument 3개. bucket `0.05 … 20` 공통 (`DurationBuckets`)
+- `execute/handler.go`: stage duration은 `step()`에서 stage span ctx로 `span.End()` 전에 기록, execution counter/duration은 응답 쓰기 직전 root span이 살아 있는 `r.Context()`로 기록 (otelhttp가 ServeHTTP 반환 뒤 End). duration 값은 ServeHTTP 진입 시각부터의 시간이라 root span 시작과 ms 미만 차이가 있음. 400 invalid_request는 metric 미기록
+- `scripts/load.sh`: 단발 모드(`-n`, `--ok/--slow/--fail`)와 지속 모드(`-d <초> [--interval <초>]`, 정상 70/slow 15/fail 15 가중 랜덤). stdout `<kind> <status> <trace_id>`, stderr 요약. M5 dashboard 개발·디펜스 시연용. verify는 단발 모드만 사용
+- `make verify-m1`: m1-01 → m1-04 순차, 첫 실패에서 중단
+- `scripts/verify/m1-04.sh` (실패 상태로 먼저 커밋: VM에서 15건 실패 확인)
+
+### 확정 결정과 이유
+- **OTel 이름에 접미사를 쓰지 않는다**: `lgtm_executions`(→ `_total`), `lgtm_execution_duration` / `lgtm_stage_duration`(unit `s` → `_seconds`). 실측 Mimir 이름이 PRD와 정확히 일치함
+- exemplar: otel-go sdk/metric v1.47.0은 **기본 활성**, 기본 filter `TraceBasedFilter` (`config.go newConfig`). `OTEL_GO_X_EXEMPLAR` 불필요. 바꾸려면 `WithExemplarFilter` 또는 `OTEL_METRICS_EXEMPLAR_FILTER`
+- Collector `prometheus_remote_write`는 exemplar 설정 키 없이 전송함 (`pkg/translator/prometheusremotewrite/helper.go` `getPromExemplars`, v0.163.0). **collector.yaml 변경 없음**, Mimir `max_global_exemplars_per_user`는 F-M1-01에서 이미 설정
+- Mimir exemplar label 키 실측: `trace_id`, `span_id` → Grafana `exemplarTraceIdDestinations.name: trace_id` 그대로 일치
+- 근거 URL: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.163.0/pkg/translator/prometheusremotewrite/helper.go , https://github.com/open-telemetry/opentelemetry-specification/blob/v1.40.0/specification/compatibility/prometheus_and_openmetrics.md , https://github.com/open-telemetry/opentelemetry-specification/blob/d4b241f451674e8f611bb589477680341006ad2b/specification/configuration/sdk-environment-variables.md#exemplar
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make clean && make` exit 0, 재실행 exit 0 | VM 실행 (`make1=0 make2=0`) | 확인(VM) |
+| `make verify-m1` exit 0 (m1-01~m1-04 전부 ALL PASS) | VM 실행. m1-02 수정(아래) 후 재실행한 결과 | 확인(VM) |
+| Mimir 저장 이름이 PRD와 정확히 일치: `lgtm_executions_total`, `lgtm_execution_duration_seconds_{bucket,sum,count}`, `lgtm_stage_duration_seconds_{bucket,sum,count}` | `m1-04.sh` (label/__name__/values 출력) | 확인(VM) |
+| `status="success"` > 0, `status="compile_error"` > 0 | `m1-04.sh` | 확인(VM) |
+| 두 histogram의 `le` 집합 == PRD bucket + `+Inf` | `m1-04.sh` | 확인(VM) |
+| label 세트: executions/duration `language,status`, stage `stage`; cid/hash/sha 류 없음 | `m1-04.sh` | 확인(VM) |
+| `query_exemplars`가 `trace_id`(+`span_id`) 라벨 반환, load.sh 응답 trace_id와 일치, Tempo 조회됨 | `m1-04.sh` | 확인(VM) |
+| Grafana `exemplarTraceIdDestinations.name: trace_id` == 실측 키 | `m1-04.sh` (grafana.yaml 파싱 vs 실측) | 확인(VM). 설정 존재·일치만, UI 동작은 미확인 |
+| load.sh 지속 모드 (`-d 6 --interval 1`) 가 요청을 계속 보내고 종료 0 | VM 실행 (total=4, errors=0) | 확인(VM). 짧은 구간만 |
+| 계측 이름/unit/bucket/label/exemplar trace_id(root·stage ctx), 400은 미기록 | `go test` (ManualReader) | 확인(mac 정적). VM에서 go test는 실행 안 함 |
+| Grafana Explore에서 exemplar 점 클릭 → Tempo → Related logs | — | **미확인** (위 수동 절차) |
+| amd64, Mimir/Collector 장애 중 metric 유실 허용 범위 | — | 미확인 |
+
+### 범위 밖 수정 (이유)
+- `scripts/verify/m1-02.sh` 1줄: Collector 로그 error 검사에서 `Exporting failed` 줄을 제외. 원인: m1-01이 mimir/loki/tempo를 일부러 삭제하는데, F-M1-04부터 backend가 5초마다 metric을 보내서 재시작 구간의 PRW 전송 실패(`context deadline exceeded`, dropped_items 10 × 3건)가 error로 찍혀 `make verify-m1`의 m1-02가 실패했다. 기동/설정 오류 검사는 그대로 유지. 첫 실행(수정 전)은 이 때문에 `verify-m1=2`였다.
+- 유의: `make clean && make`(make1/make2=0)는 이 수정 전에 실행했고, verify-m1 통과는 수정 후 같은 클러스터에서 재실행한 결과다. 수정 후 `make clean`부터 다시 돌린 것은 아님.
+
+
+### 안 된 것
+- Grafana UI에서 exemplar 점 클릭 → Tempo → Related logs 클릭 이동은 **미확인** (아래 수동 절차)
+- `lgtm_queue_rejected_total`(F-M2-04), `lgtm_output_bytes`(M5)는 범위 밖
+- 실제 compile/execute 값이 아니라 stub sleep 기반 duration
+
+### 수동 확인 절차 (VM 브라우저, 1회)
+1. VM에서 트래픽: `bash scripts/load.sh -d 120 --interval 1`
+2. Firefox `http://grafana.lgtm.local` → Explore → datasource **Mimir** → 쿼리 `histogram_quantile(0.95, sum by (le) (rate(lgtm_execution_duration_seconds_bucket[1m])))`
+3. 쿼리 옵션에서 **Exemplars** 켜기 → Run → 그래프의 점(exemplar)에 마우스를 올려 `trace_id` 확인
+4. 점의 **Query with Tempo**(trace_id 링크) 클릭 → Tempo trace 열림
+5. span(예: `compile`) 클릭 → **Logs for this span** 클릭 → Loki 로그 1줄 이상 확인
+(점이 안 보이면 시간 범위를 Last 5 minutes로 좁히고 load.sh가 도는 동안 확인. 스크린샷 1장 남기기)
+
+### 다음 단계
+- F-M2-01 compiler-service (rustc → wasm32-wasip1, 별도 pod, traceparent 전파로 backend → rustc span이 한 trace)
+- M5 dashboard에서 `load.sh -d`를 트래픽 소스로 사용
+
 ## F-M1-03 backend-skeleton (브랜치 feat/m1-03-backend-skeleton)
 
 ### 한 일

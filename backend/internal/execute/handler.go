@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"lgtm/backend/internal/telemetry"
 )
 
 // RootSpanName은 TR-06: otelhttp 기본값에 의존하지 않고 코드에서 명시한다.
@@ -55,13 +57,14 @@ type response struct {
 }
 
 type handler struct {
-	log    *slog.Logger
-	tracer trace.Tracer
+	log     *slog.Logger
+	tracer  trace.Tracer
+	metrics *telemetry.Metrics
 }
 
 // NewHandler는 root span(RootSpanName)을 만드는 otelhttp 래퍼까지 포함한 http.Handler를 반환한다.
-func NewHandler(log *slog.Logger, tp trace.TracerProvider) http.Handler {
-	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute")}
+func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics) http.Handler {
+	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m}
 	return otelhttp.NewHandler(h, RootSpanName,
 		otelhttp.WithTracerProvider(tp),
 		otelhttp.WithPropagators(propagation.TraceContext{}),
@@ -70,6 +73,7 @@ func NewHandler(log *slog.Logger, tp trace.TracerProvider) http.Handler {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	ctx := r.Context()
 	root := trace.SpanFromContext(ctx)
 
@@ -133,6 +137,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	root.SetAttributes(attribute.String("ipfs.cid", resp.CID))
 
 	h.log.InfoContext(ctx, "execute request done", "status", resp.Status)
+	// root span은 otelhttp가 ServeHTTP 반환 뒤에 End한다. 그 전에 root ctx로 기록해야 exemplar에 trace_id가 붙는다.
+	h.metrics.RecordExecution(ctx, resp.Status, req.Language, time.Since(start))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -152,7 +158,10 @@ func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, d 
 		span.SetStatus(codes.Error, err.Error())
 		h.log.ErrorContext(ctx, name+" failed", "error", err.Error())
 	}
-	return time.Since(start).Milliseconds(), err
+	elapsed := time.Since(start)
+	// stage span의 ctx로 기록한다 (span.End()는 defer라 이 뒤). span 이름 ipfs.upload → stage label ipfs_upload.
+	h.metrics.RecordStage(ctx, strings.ReplaceAll(name, ".", "_"), elapsed)
+	return elapsed.Milliseconds(), err
 }
 
 func (h *handler) invalid(ctx context.Context, w http.ResponseWriter, msg string) {
