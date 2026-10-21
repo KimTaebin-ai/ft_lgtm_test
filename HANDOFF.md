@@ -36,6 +36,7 @@
 ### 안 된 것
 - amd64 VM 미검증(검증한 VM은 arm64). sudo 비밀번호 경로 미검증
 - 새 VM에는 `make`가 없을 수 있음(Makefile이 스스로 설치 불가): `sudo apt-get install -y make`를 먼저 해야 한다. F-M6-02/README에서 다룰 것
+- checksum 불일치 경로 미테스트(정상 경로만 VM 확인)
 - verify 스크립트 첫 버전은 설치 여부를 `dpkg-query -W` 성공으로 판정해 compose가 미설치인데도 실패했음 → Status 기준으로 수정(커밋됨)
 
 ### 다음 단계
@@ -68,6 +69,7 @@
 
 ### 다음 단계
 - VM 검증 결과 반영 → draft PR
+- README Instructions에 `sudo apt install -y make git` 사전 조건 명시 (F-M6-01)
 - F-M0-02: `make cluster` 에서 `$(WITH_DOCKER) k3d cluster create --image $(K3S_IMAGE) ...`
 
 ## VM 검증 절차
