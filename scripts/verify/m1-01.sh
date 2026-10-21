@@ -38,17 +38,21 @@ pf_stop() {
 }
 trap pf_stop EXIT INT TERM
 
-# pf_start <svc> <local>:<remote>...  : 백그라운드 port-forward, 첫 포트가 열릴 때까지 대기
+# pf_start <svc> <local>:<remote>...  : 백그라운드 port-forward, 모든 로컬 포트가 열릴 때까지 대기
 pf_start() {
 	local svc="$1"; shift
 	k -n "$NS" port-forward "svc/$svc" "$@" >/dev/null 2>&1 &
 	PF_PIDS+=("$!")
-	local first="${1%%:*}"
-	for _ in $(seq 1 30); do
-		(exec 3<>"/dev/tcp/127.0.0.1/$first") 2>/dev/null && return 0
-		sleep 1
+	local m port
+	for m in "$@"; do
+		port="${m%%:*}"
+		for _ in $(seq 1 30); do
+			(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && continue 2
+			sleep 1
+		done
+		return 1
 	done
-	return 1
+	return 0
 }
 
 http_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" 2>/dev/null; }
@@ -82,8 +86,13 @@ pf_start tempo "$P_TEMPO:3200" "$P_OTLP:4318" || pf_ok=0
 if [ "$pf_ok" -ne 1 ]; then fail "port-forward 시작 실패"; echo "RESULT: $fails 건 실패" >&2; exit 1; fi
 
 ready_check() { # <name> <port>
-	local c
-	c="$(http_code "http://127.0.0.1:$2/ready")"
+	local c _
+	# port-forward 가 열린 직후 첫 연결은 실패할 수 있어 짧게 재시도한다
+	for _ in $(seq 1 15); do
+		c="$(http_code "http://127.0.0.1:$2/ready")"
+		[ "$c" = "200" ] && break
+		sleep 1
+	done
 	[ "$c" = "200" ] && pass "$1 /ready 200" || fail "$1 /ready code=${c:-없음}"
 }
 ready_check mimir "$P_MIMIR"
@@ -115,7 +124,8 @@ LOG_TRACE_ID="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 LOG_SPAN_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 log_json="{\"resourceLogs\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"verify-m1-01\"}}]},\"scopeLogs\":[{\"scope\":{\"name\":\"verify\"},\"logRecords\":[{\"timeUnixNano\":\"$now_ns\",\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"verify-m1-01 hello\"},\"traceId\":\"$LOG_TRACE_ID\",\"spanId\":\"$LOG_SPAN_ID\"}]}]}]}"
 c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H 'Content-Type: application/json' -d "$log_json" "http://127.0.0.1:$P_LOKI/otlp/v1/logs" 2>/dev/null)"
-[ "$c" = "200" ] && pass "Loki POST /otlp/v1/logs 200" || fail "Loki POST /otlp/v1/logs code=${c:-없음}"
+# Loki 는 성공 시 204 No Content 를 돌려준다
+if [ "$c" = "200" ] || [ "$c" = "204" ]; then pass "Loki POST /otlp/v1/logs $c"; else fail "Loki POST /otlp/v1/logs code=${c:-없음}"; fi
 
 loki_query() { # <logql>
 	curl -s --max-time 10 -G "http://127.0.0.1:$P_LOKI/loki/api/v1/query_range" \

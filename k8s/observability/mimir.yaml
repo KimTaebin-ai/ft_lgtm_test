@@ -1,0 +1,147 @@
+# F-M1-01 Mimir. monolithic(-target=all), classic 아키텍처(ingest storage/Kafka 없음), filesystem.
+# 근거: https://grafana.com/docs/mimir/v3.2.x/references/architecture/deployment-modes/
+#       https://grafana.com/docs/mimir/v3.2.x/configure/configuration-parameters/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mimir-config
+  namespace: observability
+data:
+  mimir.yaml: |
+    # 기본 true. false 여야 X-Scope-OrgId 헤더 없이 push/query 가 된다
+    multitenancy_enabled: false
+
+    server:
+      http_listen_port: 8080
+      grpc_listen_port: 9095
+      log_level: info
+
+    # classic 아키텍처를 명시한다 (3.x 기본값도 false)
+    ingest_storage:
+      enabled: false
+
+    blocks_storage:
+      backend: filesystem
+      filesystem:
+        dir: /data/blocks
+      tsdb:
+        dir: /data/tsdb
+      bucket_store:
+        sync_dir: /data/tsdb-sync
+
+    # pod 1개: ring 은 메모리, 복제 1
+    distributor:
+      ring:
+        kvstore:
+          store: inmemory
+    ingester:
+      ring:
+        replication_factor: 1
+        kvstore:
+          store: inmemory
+    store_gateway:
+      sharding_ring:
+        replication_factor: 1
+        kvstore:
+          store: inmemory
+    # 기본값이 memberlist 인 나머지 ring 중 -target=all 에서 실제로 쓰이는 것
+    query_scheduler:
+      ring:
+        kvstore:
+          store: inmemory
+    querier:
+      ring:
+        kvstore:
+          store: inmemory
+    compactor:
+      data_dir: /data/compactor
+      sharding_ring:
+        kvstore:
+          store: inmemory
+
+    # ruler 는 -target=all 에 포함된다 (alertmanager 는 포함되지 않음, `mimir -modules`).
+    # backend: local 은 디렉터리가 없으면 시작 실패(unable to read dir /data/ruler),
+    # filesystem(object store 방식)은 디렉터리가 없어도 빈 목록으로 취급한다
+    ruler:
+      rule_path: /data/ruler-work
+      ring:
+        kvstore:
+          store: inmemory
+    ruler_storage:
+      backend: filesystem
+      filesystem:
+        dir: /data/ruler
+
+    limits:
+      # 기본 0 = exemplar 저장 안 함 (PRD 8.5 metric → trace)
+      max_global_exemplars_per_user: 100000
+
+    usage_stats:
+      enabled: false
+
+    # 기본 경로(./metrics-activity.log)는 non-root 에서 쓸 수 없다
+    activity_tracker:
+      filepath: /data/metrics-activity.log
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mimir
+  namespace: observability
+  labels: {app: mimir}
+spec:
+  selector: {app: mimir}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mimir
+  namespace: observability
+  labels: {app: mimir}
+spec:
+  replicas: 1
+  serviceName: mimir
+  selector:
+    matchLabels: {app: mimir}
+  template:
+    metadata:
+      labels: {app: mimir}
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: mimir
+          image: grafana/mimir:3.2.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - -target=all
+            - -config.file=/etc/mimir/mimir.yaml
+          env:
+            - {name: GOMEMLIMIT, value: 800MiB}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 5
+            failureThreshold: 36
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/mimir}
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: config
+          configMap: {name: mimir-config}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: {storage: 5Gi}
