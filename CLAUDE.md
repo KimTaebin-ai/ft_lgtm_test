@@ -32,3 +32,5 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 범위 밖 파일 수정, 범위 밖 리팩터링
 - metric label에 CID, hash 같은 high-cardinality 값
 - Makefile 타겟은 idempotent, 재로그인 없이 새 VM에서 동작해야 함
+- 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). 스크립트는 bash + GNU 도구 기준
+- VM 검증: rsync -a --delete --exclude .git --exclude node_modules ./ lgtm-vm:~/lgtm/ 후 ssh lgtm-vm 'cd ~/lgtm && ...'. macOS 실행 결과는 검증으로 치지 않는다
