@@ -24,6 +24,7 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 커밋 후 git push는 실행. gh pr create --draft는 명령만 출력하고 멈춘다
 - 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). VM 검증: rsync -a --delete --exclude .git ./ lgtm-vm:~/lgtm/ 후 ssh 실행. macOS 실행 결과는 검증으로 치지 않는다
 - 버전·기본값·API는 WebFetch나 실제 명령 출력으로 확인한 값만 쓴다
+- pod가 CrashLoop이면 먼저 logs --previous | grep level=error로 첫 에러를 찾는다. 같은 수정으로 2번 실패하면 멈추고 첫 에러 줄을 보고한다
 
 ## 금지
 
