@@ -25,8 +25,9 @@ check_ver k3d "$(var K3D_VERSION)" "$(k3d version 2>/dev/null | sed -n '1s/^k3d 
 dv="$(var DOCKER_VERSION_STR)"
 check_ver docker-ce "$dv" "$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null)"
 check_ver docker-ce-cli "$dv" "$(dpkg-query -W -f='${Version}' docker-ce-cli 2>/dev/null)"
-dpkg-query -W docker-buildx-plugin >/dev/null 2>&1 && pass "docker-buildx-plugin 설치됨" || fail "docker-buildx-plugin 없음"
-dpkg-query -W docker-compose-plugin >/dev/null 2>&1 && fail "docker-compose-plugin 이 설치되어 있음" || pass "docker-compose-plugin 없음"
+installed() { [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]; }
+installed docker-buildx-plugin && pass "docker-buildx-plugin 설치됨" || fail "docker-buildx-plugin 없음"
+installed docker-compose-plugin && fail "docker-compose-plugin 이 설치되어 있음" || pass "docker-compose-plugin 없음"
 echo "INFO: k3d 기본 k3s / 고정 K3S_IMAGE: $(k3d version 2>/dev/null | sed -n 's/^k3s version //p') / $(var K3S_IMAGE)"
 
 # 2. docker daemon + 래퍼
