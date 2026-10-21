@@ -12,6 +12,9 @@ DOCKER_VERSION_STR := 5:29.9.1-1~debian.13~trixie
 
 CLUSTER_NAME       := lgtm
 
+# 소스 content hash 태그 (VM 에는 .git 이 없다. scripts/image-tag.sh). :latest 금지. 사용 시점에 계산(=)
+BACKEND_IMAGE      = lgtm-backend:src-$(shell bash scripts/image-tag.sh backend)
+
 export CLUSTER_NAME K3D_VERSION K3S_IMAGE KUBECTL_VERSION HELM_VERSION DOCKER_VERSION_STR
 
 # 재로그인 없이 docker 그룹 권한으로 실행하는 래퍼 (docker/k3d 호출 시 앞에 붙인다)
@@ -28,8 +31,9 @@ install:
 cluster:
 	@bash scripts/cluster.sh
 
+# 현재는 backend 만. compiler / frontend 이미지는 각 피처에서 추가
 build:
-	@echo "TODO F-M1-03"
+	@BACKEND_IMAGE=$(BACKEND_IMAGE) bash scripts/build.sh
 
 # observability → dummy 순서. 이후 ipfs, app 이 이어진다. 대기는 readinessProbe + rollout status
 # Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
@@ -55,6 +59,10 @@ deploy:
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/dummy/
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy wait --for=condition=Available deploy --all --timeout=120s
 	@bash scripts/wait-ingress.sh 60 lgtm.local grafana.lgtm.local/api/health ipfs.lgtm.local
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/app/00-namespace.yaml
+	@sed 's|__BACKEND_IMAGE__|$(BACKEND_IMAGE)|' k8s/app/backend.yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
+	@kubectl --context k3d-$(CLUSTER_NAME) -n lgtm rollout status deploy/backend --timeout=120s
+	@bash scripts/wait-backend.sh 60
 
 hosts:
 	@bash scripts/hosts.sh

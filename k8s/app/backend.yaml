@@ -1,0 +1,70 @@
+# F-M1-03 backend. image 는 make deploy 가 __BACKEND_IMAGE__ 를 소스 hash 태그로 치환한다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: lgtm
+  labels: {app: backend}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: backend}
+  template:
+    metadata:
+      labels: {app: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: backend
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: lgtm
+spec:
+  selector: {app: backend}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+# /healthz 는 노출하지 않는다. lgtm.local 의 / 는 dummy(k8s/dummy) 그대로 (F-M4-01에서 교체).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: lgtm.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port: {number: 80}
