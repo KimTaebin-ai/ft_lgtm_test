@@ -35,7 +35,7 @@ type CompileError struct{ Stderr string }
 func (e *CompileError) Error() string { return "rustc failed" }
 
 // CmdFunc는 dir 안에서 실행할 명령을 만든다. 테스트에서 느린 명령을 주입하는 용도.
-// Dir, SysProcAttr, Cancel, WaitDelay, Stderr는 Runner가 덮어쓴다.
+// Runner가 Dir, SysProcAttr, Cancel, WaitDelay, Stderr를 덮어쓴다.
 type CmdFunc func(ctx context.Context, dir string) *exec.Cmd
 
 // Runner는 compile 요청을 처리한다. 값은 NewRunner로 만든다.
@@ -61,9 +61,10 @@ func RustcCmd(ctx context.Context, dir string) *exec.Cmd {
 		"-C", "opt-level=1",
 		"--crate-type", "bin",
 		"--crate-name", "main",
-		"-o", filepath.Join(dir, outName),
-		filepath.Join(dir, srcName),
+		"-o", outName,
+		srcName,
 	)
+	cmd.Dir = dir // 상대 경로로 넘겨 rustc 에러 메시지에 임시 디렉토리 경로(req-XXXX)가 새지 않게 한다
 	// 하드닝(env -i 수준 정리)은 F-M2-02. 여기서는 rustc 실행에 필요한 것만 넘긴다.
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),

@@ -187,10 +187,12 @@ print("fn main() { let mut s = 0u64;")
 print("\n".join("s = f%d(s);" % i for i in range(n)))
 print("println!(\"{}\", s); }")' >"$TMP/slow.rs"
 SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+par_pids=()
 for i in 1 2 3; do
 	( t0=$(now_s); c="$(compile_file "$TMP/slow.rs" "$TMP/par$i.wasm")"; t1=$(now_s); echo "$c $(elapsed "$t0" "$t1")" >"$TMP/par$i.res" ) &
+	par_pids+=("$!")
 done
-wait
+wait "${par_pids[@]}" # 인자 없는 wait 는 백그라운드 port-forward 까지 기다려 영원히 막힌다
 done_n=0
 for i in 1 2 3; do
 	read -r c dt <"$TMP/par$i.res"

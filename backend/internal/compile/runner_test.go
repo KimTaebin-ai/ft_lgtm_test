@@ -84,7 +84,7 @@ func TestTimeoutKillsWholeProcessGroup(t *testing.T) {
 	// sh 의 자식(sleep)이 그룹 kill 로 죽었는지 확인한다. 좀비 reaping 지연을 위해 잠시 재시도한다.
 	dead := false
 	for i := 0; i < 50 && !dead; i++ {
-		if syscall.Kill(pid, 0) == syscall.ESRCH {
+		if !processAlive(pid) {
 			dead = true
 			break
 		}
@@ -95,6 +95,16 @@ func TestTimeoutKillsWholeProcessGroup(t *testing.T) {
 		t.Errorf("자식 프로세스 %d 가 살아 있음 (프로세스 그룹 kill 실패)", pid)
 	}
 	assertWorkDirEmpty(t, r)
+}
+
+// processAlive는 좀비를 죽은 것으로 본다. 컨테이너(go test 를 PID 1 아래에서 실행)에서는 고아가 된 자식이
+// reaping 되지 않아 kill(pid, 0)이 계속 성공하므로 /proc 의 상태 문자를 본다.
+func processAlive(pid int) bool {
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+		s := string(b)
+		return s[strings.LastIndexByte(s, ')')+2] != 'Z'
+	}
+	return syscall.Kill(pid, 0) == nil
 }
 
 func TestRequestCancelStopsCompile(t *testing.T) {
