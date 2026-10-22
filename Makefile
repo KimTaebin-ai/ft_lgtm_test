@@ -39,10 +39,10 @@ build:
 	@BACKEND_IMAGE=$(BACKEND_IMAGE) COMPILER_IMAGE=$(COMPILER_IMAGE) bash scripts/build.sh
 	@FRONTEND_IMAGE=$(FRONTEND_IMAGE) bash scripts/build-frontend.sh
 
-# observability → dummy 순서. 이후 ipfs, app 이 이어진다. 대기는 readinessProbe + rollout status
+# observability → ipfs → app 순서 (PRD 9.1). 대기는 readinessProbe + rollout status
 # Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
 # dashboards ConfigMap 은 dashboards/*.json 에서 만든다 (0개면 빈 ConfigMap)
-# dummy-grafana, dummy-lgtm 은 apply 가 prune 하지 않으므로 명시적으로 지운다 (기존 클러스터 대응)
+# dummy-grafana, dummy-lgtm, dummy-ipfs 는 apply 가 prune 하지 않으므로 명시적으로 지운다 (기존 클러스터 대응)
 deploy:
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/observability/00-namespace.yaml
 	@kubectl --context k3d-$(CLUSTER_NAME) -n observability get secret grafana-admin >/dev/null 2>&1 || \
@@ -59,10 +59,12 @@ deploy:
 	@for d in otel-collector grafana; do \
 		kubectl --context k3d-$(CLUSTER_NAME) -n observability rollout status deploy/$$d --timeout=300s || exit 1; \
 	done
-	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-grafana dummy-lgtm --ignore-not-found
-	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/dummy/
-	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy wait --for=condition=Available deploy --all --timeout=120s
-	@bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health ipfs.lgtm.local
+	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-grafana dummy-lgtm dummy-ipfs --ignore-not-found
+	@bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/00-namespace.yaml
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/
+	@kubectl --context k3d-$(CLUSTER_NAME) -n ipfs rollout status statefulset/kubo --timeout=300s
+	@bash scripts/wait-ingress.sh 120 ipfs.lgtm.local/ipfs/bafkqaaa
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/app/00-namespace.yaml
 	@sed 's|__COMPILER_IMAGE__|$(COMPILER_IMAGE)|' k8s/app/compiler.yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
 	@kubectl --context k3d-$(CLUSTER_NAME) -n lgtm rollout status deploy/compiler --timeout=120s
@@ -83,7 +85,7 @@ status:
 
 # 전체 검증: 순차 실행, 첫 실패에서 중단. verify 스크립트는 서로를 호출하지 않는다 (port-forward 충돌 방지). VM(Linux)에서만 동작한다
 VERIFY_M1 = m1-01 m1-02 m1-03 m1-04
-VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m4-01 m4-02
+VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m3-01 m4-01 m4-02
 
 # $(call run_verify,<타겟 이름>,<스크립트 목록>)
 define run_verify
