@@ -37,7 +37,8 @@ pf_kill() {
 	wait 2>/dev/null
 	PF_PIDS=()
 }
-cleanup() { pf_kill; rm -rf "$TMP"; }
+# 6b 에서 compiler 를 scale 0 으로 내리므로, 중단/실패해도 종료 시 항상 1 로 복구한다 (idempotent)
+cleanup() { pf_kill; k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 # pf_start <ns> <svc> <local>:<remote>
