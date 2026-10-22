@@ -177,7 +177,9 @@ DSPANS="$(tempo_spans "$DTID" 3)"
 v="$(printf '%s' "$DSPANS" | pyj "[s['error'] for s in d if s['name']=='POST /api/execute'][0]")"
 [ "$v" = "True" ] && pass "internal_error 의 root span 이 ERROR" || fail "root span error='${v}'"
 k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1
-k -n "$NS" rollout status deploy/compiler --timeout=120s >/dev/null 2>&1 || fail "compiler 복구 rollout 실패"
+# scale 직후 rollout status 는 새 pod 가 생기기 전에 성공을 돌려줄 수 있어, pod 가 생길 때까지 기다린 뒤 Ready 를 본다
+for _ in $(seq 1 30); do [ -n "$(k -n "$NS" get pod -l app=compiler -o name 2>/dev/null)" ] && break; sleep 1; done
+k -n "$NS" wait --for=condition=Ready pod -l app=compiler --timeout=120s >/dev/null 2>&1 || fail "compiler 복구 Ready 실패"
 pf_start "$NS" compiler "$P_COMPILER:80" || fail "port-forward (compiler, 복구 후) 실패"
 
 # ---- 7. 동시 3건 compile → 전부 완료, 최대 동시 2 (로그의 started/finished 로 확인) ----

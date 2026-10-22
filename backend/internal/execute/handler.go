@@ -112,9 +112,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var cErr error
 	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, 0, func(ctx context.Context, span trace.Span) error {
 		var err error
+		h.log.InfoContext(ctx, "compile started")
 		wasm, err = h.compiler.compile(ctx, req.Code)
 		if err == nil {
 			span.SetAttributes(attribute.Int("wasm.size_bytes", len(wasm)))
+			h.log.InfoContext(ctx, "compile finished", "wasm_bytes", len(wasm))
 		}
 		return err
 	})
