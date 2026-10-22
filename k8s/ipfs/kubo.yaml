@@ -1,0 +1,145 @@
+# F-M3-01 Kubo 노드 (PRD IP-01/04/05/08). 이미지 태그 고정: ipfs/kubo:v0.43.1 (amd64/arm64 multi-arch, 2026-10-22 Docker Hub 확인).
+# 설정은 /container-init.d 의 스크립트가 매 기동마다 코드로 적용한다 (수동 설정 금지). 키 근거: kubo docs/config.md, docs/telemetry.md.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: kubo-init, namespace: ipfs}
+data:
+  001-lgtm-config.sh: |
+    #!/bin/sh
+    # daemon 기동 전에 실행된다. 같은 값을 다시 써도 결과가 같다 (idempotent).
+    set -eu
+    c() { ipfs config "$@"; }
+    cj() { ipfs config --json "$@"; }
+    # Gateway 8080: ipfs.lgtm.local 은 path gateway (subdomain redirect 없음). 로컬 데이터만 서빙 (NoFetch)
+    c Addresses.Gateway /ip4/0.0.0.0/tcp/8080
+    cj Gateway.PublicGateways '{"ipfs.lgtm.local":{"Paths":["/ipfs","/ipns"],"UseSubdomains":false}}'
+    cj Gateway.NoFetch true
+    # API 5001: ClusterIP Service 로만 접근 (NetworkPolicy 가 backend 만 허용, Ingress 없음)
+    c Addresses.API /ip4/0.0.0.0/tcp/5001
+    # Swarm: tcp 4001 + quic-v1 udp 4001 (WebTransport 제외: 매핑된 포트는 4001 tcp/udp 뿐)
+    cj Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001","/ip6/::/tcp/4001","/ip4/0.0.0.0/udp/4001/quic-v1","/ip6/::/udp/4001/quic-v1"]'
+    # 8GB VM: 연결 수와 libp2p 리소스 제한
+    cj Swarm.ConnMgr '{"Type":"basic","LowWater":20,"HighWater":60,"GracePeriod":"20s"}'
+    cj Swarm.ResourceMgr.MaxMemory '"512MiB"'
+    cj Swarm.ResourceMgr.MaxFileDescriptors 4096
+    c Datastore.StorageMax 4GB
+    # 외부 서비스 접촉 기능 중 IPFS 공유에 불필요한 것: AutoTLS(registration.libp2p.direct, ACME). DHT, bootstrap, AutoConf 는 유지
+    cj AutoTLS.Enabled false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: kubo, namespace: ipfs, labels: {app: kubo}}
+spec:
+  serviceName: kubo-api
+  replicas: 1
+  selector: {matchLabels: {app: kubo}}
+  template:
+    metadata: {labels: {app: kubo}}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # 이미지의 ipfs 사용자
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: kubo
+          image: ipfs/kubo:v0.43.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: IPFS_TELEMETRY, value: "off"}
+            - {name: DO_NOT_TRACK, value: "1"}
+            - {name: GOMEMLIMIT, value: 800MiB}
+          ports:
+            - {name: swarm-tcp, containerPort: 4001, hostPort: 4001, protocol: TCP}
+            - {name: swarm-udp, containerPort: 4001, hostPort: 4001, protocol: UDP}
+            - {name: api, containerPort: 5001, protocol: TCP}
+            - {name: gateway, containerPort: 8080, protocol: TCP}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # 쓰기 경로: /data/ipfs(PVC), /tmp(emptyDir). 실측 결과는 HANDOFF
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data/ipfs}
+            - {name: tmp, mountPath: /tmp}
+            - {name: init, mountPath: /container-init.d, readOnly: true}
+          startupProbe:
+            httpGet: {path: /api/v0/version, port: api}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket: {port: gateway}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: gateway}
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: init
+          configMap: {name: kubo-init, defaultMode: 0555}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 5Gi}}
+---
+# API 5001: ClusterIP 전용. 접근은 NetworkPolicy kubo-ingress 가 backend 로 제한
+apiVersion: v1
+kind: Service
+metadata: {name: kubo-api, namespace: ipfs, labels: {app: kubo}}
+spec:
+  type: ClusterIP
+  selector: {app: kubo}
+  ports:
+    - {name: api, port: 5001, targetPort: api}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kubo-gateway, namespace: ipfs, labels: {app: kubo}}
+spec:
+  type: ClusterIP
+  selector: {app: kubo}
+  ports:
+    - {name: gateway, port: 8080, targetPort: gateway}
+---
+# ipfs.lgtm.local → gateway 8080 만 (API 는 Ingress 에 없다, IP-08)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: kubo-gateway, namespace: ipfs}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ipfs.lgtm.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kubo-gateway
+                port: {number: 8080}
+---
+# 5001 은 namespace lgtm 의 app=backend 만. 8080(Traefik 등)과 4001(외부 swarm)은 모든 출처 허용
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: kubo-ingress, namespace: ipfs}
+spec:
+  podSelector: {matchLabels: {app: kubo}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: lgtm}}
+          podSelector: {matchLabels: {app: backend}}
+      ports:
+        - {protocol: TCP, port: 5001}
+    - ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 4001}
+        - {protocol: UDP, port: 4001}
