@@ -65,15 +65,20 @@ func RustcCmd(ctx context.Context, dir string) *exec.Cmd {
 		srcName,
 	)
 	cmd.Dir = dir // 상대 경로로 넘겨 rustc 에러 메시지에 임시 디렉토리 경로(req-XXXX)가 새지 않게 한다
-	// 하드닝(env -i 수준 정리)은 F-M2-02. 여기서는 rustc 실행에 필요한 것만 넘긴다.
-	cmd.Env = []string{
+	cmd.Env = rustcEnv(dir)
+	return cmd
+}
+
+// rustcEnv는 rustc에 넘기는 환경변수 전체다. 명시한 5개만 전달하고 프로세스 환경은 상속하지 않는다 (env -i 동등).
+// 소스가 env!/option_env!/std::env 로 읽어도 다른 Service 주소나 비밀값이 없게 하려는 것이다 (F-M2-02).
+func rustcEnv(dir string) []string {
+	return []string{
 		"PATH=" + os.Getenv("PATH"),
 		"RUSTUP_HOME=" + os.Getenv("RUSTUP_HOME"),
 		"CARGO_HOME=" + os.Getenv("CARGO_HOME"),
 		"HOME=" + dir,
 		"TMPDIR=" + dir,
 	}
-	return cmd
 }
 
 // Run은 src를 컴파일해 wasm 바이트를 반환한다. 반환 에러는 *CompileError, ErrTimeout, ctx 에러, 그 외(내부 오류) 중 하나다.

@@ -30,6 +30,17 @@ func NewHandler(r *Runner, log *slog.Logger) http.Handler {
 		}
 		span.SetAttributes(attribute.Int("code.size_bytes", len(src)))
 
+		// rustc 실행 전 소스 deny-list (F-M2-02). 위반은 사용자 코드 오류라 422다.
+		if v := CheckSource(string(src)); v != nil {
+			fail(span, "source denied", errors.New(v.Rule))
+			span.SetAttributes(attribute.String("denylist.rule", v.Rule))
+			log.WarnContext(ctx, "source denied", "rule", v.Rule, "line", v.Line)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = io.WriteString(w, v.Message())
+			return
+		}
+
 		wasm, wait, err := r.Run(ctx, src)
 		span.SetAttributes(attribute.Int64("compile.queue_wait_ms", wait.Milliseconds()))
 

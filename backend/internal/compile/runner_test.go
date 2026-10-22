@@ -231,3 +231,43 @@ func TestHandlerRejectsEmptyBody(t *testing.T) {
 		t.Errorf("status=%d", resp.StatusCode)
 	}
 }
+
+func TestRustcEnvIsExplicitListOnly(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("RUSTUP_HOME", "/r")
+	t.Setenv("CARGO_HOME", "/c")
+	t.Setenv("LGTM_SECRET", "s3cret")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("BACKEND_SERVICE_HOST", "10.0.0.2")
+	env := rustcEnv("/work/req-1")
+	var keys []string
+	for _, kv := range env {
+		keys = append(keys, strings.SplitN(kv, "=", 2)[0])
+		if strings.Contains(kv, "s3cret") || strings.Contains(kv, "10.0.0.") {
+			t.Errorf("비밀값/Service 주소가 전달됨: %s", kv)
+		}
+	}
+	if got, want := strings.Join(keys, ","), "PATH,RUSTUP_HOME,CARGO_HOME,HOME,TMPDIR"; got != want {
+		t.Errorf("keys=%s, 기대 %s", got, want)
+	}
+	cmd := RustcCmd(context.Background(), "/work/req-1")
+	if len(cmd.Env) != 5 {
+		t.Errorf("RustcCmd Env 길이=%d (nil/상속 아님, 5개여야 함)", len(cmd.Env))
+	}
+}
+
+func TestHandlerDeniesSourceBeforeRunning(t *testing.T) {
+	r := newTestRunner(t, `echo ran > /tmp/lgtm-denylist-should-not-run; exit 1`, 1)
+	h := NewHandler(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodPost, "/compile", strings.NewReader(`fn main(){ include_str!("/etc/passwd"); }`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.HasPrefix(rec.Body.String(), "error: LGTM 소스 정책 위반 [deny-include-macro]") {
+		t.Fatalf("code=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat("/tmp/lgtm-denylist-should-not-run"); err == nil {
+		os.Remove("/tmp/lgtm-denylist-should-not-run")
+		t.Error("deny-list 위반인데 명령이 실행됨")
+	}
+	assertWorkDirEmpty(t, r)
+}
