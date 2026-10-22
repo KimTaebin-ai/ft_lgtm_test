@@ -77,8 +77,14 @@ fn main() { unsafe { let p = std::ptr::addr_of_mut!(BUF) as *mut u8; p.write_vol
 EXAMPLE_SRC="$(python3 -I -c 'import re,sys; s=open(sys.argv[1]).read(); print(re.search(r"EXAMPLE_CODE = `(.*?)`", s, re.S).group(1))' frontend/src/example.ts)"
 
 # ---- 0. 전제: backend 가 Ready, 쓸 수 있는 디스크 없음 ----
-ready="$(k -n "$NS" get pod -l app=backend -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null)"
-[ -n "$ready" ] && [ "$(printf '%s\n' "$ready" | grep -vc '^true$')" = "0" ] && pass "backend pod Ready" || fail "backend pod Ready 아님 (ready='${ready}')"
+# rollout 직후에는 종료 중인 이전 pod 가 남아 있을 수 있다: 종료 중이 아닌 pod 가 정확히 하나이고 Ready 일 때까지 기다린다 (최대 120초)
+ready=""
+for i in $(seq 1 120); do
+	lines="$(k -n "$NS" get pod -l app=backend -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}|{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null)"
+	if [ "$(printf '%s\n' "$lines" | grep -c .)" = "1" ] && [ "$lines" = "|true" ]; then ready="true"; break; fi
+	sleep 1
+done
+[ "$ready" = "true" ] && pass "backend pod 1개, Ready" || fail "backend pod Ready 아님 (pods='${lines}')"
 rofs="$(k -n "$NS" get deploy backend -o jsonpath='{.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem}' 2>/dev/null)"
 vols="$(k -n "$NS" get deploy backend -o jsonpath='{.spec.template.spec.volumes}' 2>/dev/null)"
 [ "$rofs" = "true" ] && [ -z "$vols" ] && pass "backend: readOnlyRootFilesystem=true, volume 없음 (출력이 디스크에 쓰일 곳이 없음)" || fail "backend rootfs/volumes (readOnlyRootFilesystem='${rofs}' volumes='${vols}')"
@@ -131,7 +137,7 @@ if [ -n "$peak" ] && [ -n "$lim" ] && [ "$lim" != "max" ]; then
 else
 	fail "backend cgroup memory.peak/max 를 읽지 못함 (peak='${peak}' max='${lim}')"
 fi
-left="$(k -n "$NS" exec "$BPOD" -- sh -c 'ls -A /tmp /var/tmp 2>/dev/null' 2>&1)"
+left="$(k -n "$NS" exec "$BPOD" -- sh -c 'find /tmp /var/tmp -mindepth 1 2>/dev/null' 2>&1)"
 [ -z "$left" ] && pass "backend /tmp, /var/tmp 비어 있음 (임시 파일 0개)" || fail "backend 임시 파일 잔여: $left"
 
 # ---- 7. env / args ----

@@ -39,9 +39,11 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
-            # F-M2-03: wasmtime Engine + module compile(≈2MB wasm) + guest 10MiB. 잠정값, VM 실측으로 확정 (HANDOFF F-M2-03)
+            # F-M2-03 실측 (VM arm64, 동시 N건이 각각 9MB 를 쥐고 5초 spin 할 때 cgroup memory.peak):
+            #   idle 10MB / N=1 27MB / N=4 70MB / N=8 122MB / N=16 232MB → 동시 요청당 약 +14MB. 동시성 상한은 F-M2-04.
+            #   limit 512Mi = N=16 실측(232MB)의 2배 이상. request 는 idle + 몇 건 동시 실행 분.
             requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: 1, memory: 256Mi}
+            limits: {cpu: 1, memory: 512Mi}
 ---
 apiVersion: v1
 kind: Service
