@@ -14,6 +14,8 @@ CLUSTER_NAME       := lgtm
 
 # 소스 content hash 태그 (VM 에는 .git 이 없다. scripts/image-tag.sh). :latest 금지. 사용 시점에 계산(=)
 BACKEND_IMAGE      = lgtm-backend:src-$(shell bash scripts/image-tag.sh backend)
+# compiler 도 같은 backend/ 소스 hash (같은 Go 모듈이라 backend 코드가 바뀌면 두 태그가 함께 바뀐다)
+COMPILER_IMAGE     = lgtm-compiler:src-$(shell bash scripts/image-tag.sh backend)
 
 export CLUSTER_NAME K3D_VERSION K3S_IMAGE KUBECTL_VERSION HELM_VERSION DOCKER_VERSION_STR
 
@@ -31,9 +33,9 @@ install:
 cluster:
 	@bash scripts/cluster.sh
 
-# 현재는 backend 만. compiler / frontend 이미지는 각 피처에서 추가
+# backend + compiler. frontend 이미지는 F-M4 에서 추가
 build:
-	@BACKEND_IMAGE=$(BACKEND_IMAGE) bash scripts/build.sh
+	@BACKEND_IMAGE=$(BACKEND_IMAGE) COMPILER_IMAGE=$(COMPILER_IMAGE) bash scripts/build.sh
 
 # observability → dummy 순서. 이후 ipfs, app 이 이어진다. 대기는 readinessProbe + rollout status
 # Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
@@ -60,6 +62,8 @@ deploy:
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy wait --for=condition=Available deploy --all --timeout=120s
 	@bash scripts/wait-ingress.sh 60 lgtm.local grafana.lgtm.local/api/health ipfs.lgtm.local
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/app/00-namespace.yaml
+	@sed 's|__COMPILER_IMAGE__|$(COMPILER_IMAGE)|' k8s/app/compiler.yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
+	@kubectl --context k3d-$(CLUSTER_NAME) -n lgtm rollout status deploy/compiler --timeout=120s
 	@sed 's|__BACKEND_IMAGE__|$(BACKEND_IMAGE)|' k8s/app/backend.yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
 	@kubectl --context k3d-$(CLUSTER_NAME) -n lgtm rollout status deploy/backend --timeout=120s
 	@bash scripts/wait-backend.sh 60

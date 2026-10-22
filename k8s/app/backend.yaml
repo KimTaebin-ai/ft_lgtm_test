@@ -23,6 +23,8 @@ spec:
         - name: backend
           image: __BACKEND_IMAGE__
           imagePullPolicy: IfNotPresent
+          env:
+            - {name: COMPILER_URL, value: "http://compiler.lgtm.svc.cluster.local/compile"}
           ports:
             - {name: http, containerPort: 8080}
           securityContext:
