@@ -60,7 +60,7 @@ poll_series() { # <selector> → 최대 60s 폴링, 마지막 결과 출력
 	printf '%s' "${out:-[]}"
 }
 
-# ---- 1. load.sh: 정상 ≥5, __slow__ ≥2, __fail_compile__ ≥2 ----
+# ---- 1. load.sh: 정상 ≥5, 느린 요청 ≥2, __fail_compile__ ≥2 ----
 [ -x scripts/load.sh ] && pass "scripts/load.sh 존재" || fail "scripts/load.sh 없음/실행권한 없음"
 LOAD_OUT="$(bash scripts/load.sh --ok 6 --slow 2 --fail 2 2>"$LOAD_ERR")"
 load_rc=$?
@@ -68,7 +68,7 @@ load_rc=$?
 cnt() { printf '%s\n' "$LOAD_OUT" | awk -v k="$1" -v s="$2" '$1==k && ($2==s || s=="*") {n++} END{print n+0}'; }
 n_ok="$(cnt ok success)"; n_slow="$(cnt slow success)"; n_fail="$(cnt fail compile_error)"
 [ "$n_ok" -ge 5 ] && pass "정상 요청 success ${n_ok}건" || fail "정상 요청 success ${n_ok}건 (기대 ≥5)"
-[ "$n_slow" -ge 2 ] && pass "__slow__ 요청 success ${n_slow}건" || fail "__slow__ 요청 success ${n_slow}건 (기대 ≥2)"
+[ "$n_slow" -ge 2 ] && pass "느린 요청 success ${n_slow}건" || fail "느린 요청 success ${n_slow}건 (기대 ≥2)"
 [ "$n_fail" -ge 2 ] && pass "__fail_compile__ 요청 compile_error ${n_fail}건" || fail "__fail_compile__ 요청 compile_error ${n_fail}건 (기대 ≥2)"
 TRACE_IDS="$(printf '%s\n' "$LOAD_OUT" | awk 'length($3)==32 {print $3}')"
 

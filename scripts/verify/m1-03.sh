@@ -188,14 +188,14 @@ v="$(printf '%s' "$FSPANS" | pyj "'y' if [s for s in d if s['name']=='POST /api/
 v="$(printf '%s' "$FSPANS" | pyj "sorted(s['name'] for s in d)")"
 [ "$v" = "['POST /api/execute', 'compile', 'ipfs.upload', 'rustc']" ] && pass "compile 실패 trace span 4개 (execute 생략, ipfs.upload 수행)" || fail "compile 실패 trace span='${v}'"
 
-# ---- 7. __slow__ : 전체 2~3초 ----
+# ---- 7. 느린 요청 (실제 2.2초 busy loop Rust): 전체 2~3초 ----
 t0=$(date +%s.%N)
-post 'fn main() { /* __slow__ */ }'
+post 'fn main() { let t = std::time::Instant::now(); while t.elapsed().as_millis() < 2200 {} }'
 t1=$(date +%s.%N)
 rm -f "$BODY_OUT"
 dt="$(python3 -I -c 'import sys; print(float(sys.argv[2])-float(sys.argv[1]))' "$t0" "$t1")"
 ok="$(python3 -I -c 'import sys; print(1 if 2.0 <= float(sys.argv[1]) <= 3.5 else 0)' "$dt")"
-[ "$HTTP_CODE" = "200" ] && [ "$ok" = "1" ] && pass "__slow__ 소요 ${dt}s (2~3.5s 허용)" || fail "__slow__ HTTP ${HTTP_CODE} 소요 ${dt}s"
+[ "$HTTP_CODE" = "200" ] && [ "$ok" = "1" ] && pass "느린 요청 소요 ${dt}s (2~3.5s 허용)" || fail "느린 요청 HTTP ${HTTP_CODE} 소요 ${dt}s"
 
 # ---- 8. 회귀: lgtm.local / 은 frontend(F-M4-01 이후), /healthz 는 backend 가 아니다 (frontend SPA fallback) ----
 root_body="$(lurl "http://$HOST/")"
