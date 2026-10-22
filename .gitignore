@@ -14,3 +14,4 @@ kubeconfig*
 .vscode/
 .idea/
 *.swp
+*.tsbuildinfo
