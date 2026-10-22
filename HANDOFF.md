@@ -10,6 +10,56 @@
 ### 다음 단계
 -->
 
+## F-M4-01 frontend-shell (브랜치 feat/m4-01-frontend-shell)
+
+### 한 일
+- `frontend/`: Vite 8.3.5 + React 19.3.1 + TypeScript 5.9.3(7.x 금지, typescript-eslint 8.72.0 peer `<6.1.0`) + monaco-editor 0.57.0. 전부 정확 버전 고정 + lockfile, Node 22 (`.nvmrc` 22.23.2, 빌드 이미지 `node:22.23.4-alpine`)
+- Monaco 로컬 번들: `@monaco-editor/react` 미사용 (loader 에 jsdelivr URL 이 남음). `monaco-editor` 를 직접 쓰는 `src/Editor.tsx`. import 는 package `exports` 의 `./*` → `esm/vs/*.js` 매핑을 따름: `monaco-editor/editor/editor.api`, `monaco-editor/languages/definitions/rust/register`(0.57 에서 `basic-languages` 경로는 사라짐), worker `monaco-editor/editor/editor.worker?worker` (Rust 는 editor.worker 하나만 필요)
+- 예제(struct/trait/iterator), Run 버튼(실행 중 disabled + spinner), 결과는 status + stdout 원문만
+- dev: `vite.config.ts` 의 `/api` proxy → `LGTM_VM_URL`(기본 `http://192.168.64.8`), Host 헤더 `lgtm.local`
+- 이미지: multi-stage, build 단계에서 `npm run lint && npm run build`, `nginxinc/nginx-unprivileged:1.31.7-alpine`(uid 101, 8080). 태그 `lgtm-frontend:src-<hash>` (`scripts/image-tag.sh frontend` 재사용)
+- `k8s/app/frontend.yaml`(Deployment/Service/Ingress `lgtm.local /`), `scripts/build-frontend.sh`, Makefile 맨 아래 `deploy-frontend`(dummy-lgtm 은 `delete --ignore-not-found` 로 정리), `scripts/verify/m4-01.sh`
+- `k8s/dummy/lgtm.yaml`, backend/, k8s/observability/, 기존 Makefile 타겟은 수정하지 않음
+
+### emptyDir 목록 (확정: `/tmp` 하나)
+- `docker run --read-only` 로 실제 기동: `--read-only` 만 주면 `mkdir() "/tmp/proxy_temp" failed (30: Read-only file system)` 로 종료. `/tmp` 만 쓰기 가능하게 하면 기동·200 응답. `/tmp` 에 생긴 것: nginx.pid, client_temp, proxy_temp, fastcgi_temp, uwsgi_temp, scgi_temp. `/var/cache/nginx` 쓰기 불필요(touch 시도는 read-only 실패, 기동엔 영향 없음)
+- 이 확인은 **Mac Docker**(non-root 101, cap-drop ALL) 기준이다. k8s(VM) 기동은 아래 "안 된 것"
+- `10-listen-on-ipv6-by-default.sh: can not modify default.conf` 는 정보성 로그(우리 conf 는 이미 `listen 8080`)
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `npm run lint`(eslint + tsc), `npm run build` 통과 | Mac `frontend/` 에서 실행 | 확인(mac) |
+| dist 에 CDN 도메인(jsdelivr/unpkg/cdnjs/googleapis/gstatic) 0건. http(s) 호스트는 w3.org, github.com, react.dev, code.visualstudio.com, microsoft.com (주석·xmlns 문자열) | `grep -rEoh 'https?://...' dist` | 확인(mac) |
+| 이미지 빌드(lint+build 포함) 성공, `--read-only --tmpfs /tmp --user 101 --cap-drop ALL` 에서 `/` 200, `id="root"` 포함, `/deep/link` SPA fallback 200 | Mac Docker 로컬 실행 | 확인(mac). VM 아님 |
+| frontend pod Ready(1/1, restart 0), limit 100m/64Mi, 태그 `lgtm-frontend:src-81848450da36`, IfNotPresent | `make deploy-frontend` 후 `m4-01.sh` | 확인(VM) |
+| `lgtm.local /` 200 + `id="root"`, dummy 텍스트 아님 | `m4-01.sh` | 확인(VM) |
+| 이미지 안 정적 파일(6개)에 CDN 도메인 0건, index.html 외부 src/href 없음 | `m4-01.sh` | 확인(VM) |
+| `/api/execute` GET 405, POST backend JSON (Ingress 회귀 없음) | `m4-01.sh` | 확인(VM) |
+| `docker build --target build` (npm ci + lint + build) | `m4-01.sh` | 확인(VM) |
+| `bash scripts/verify/m4-01.sh` exit 0 (ALL PASS) | VM 실행 | 확인(VM) |
+| k8s 에서 readOnlyRootFilesystem + emptyDir(/tmp) 기동, nginx 로그에 emerg/error 없음 (ipv6 정보성 한 줄만) | VM `kubectl logs` | 확인(VM) |
+| Mac `npm run dev`(포트 5199) 의 `/api/execute` POST → VM backend stub 응답(`stub output`) 프록시 | curl localhost:5199 | 확인(mac). 브라우저에서 Run 클릭은 미실시 |
+
+### 안 된 것
+- `m4-01.sh` 를 구현 전에 커밋했으나 당시 VM 이 꺼져 있어 "VM 에서 실패" 는 확인하지 못했다 (이후 구현 + 배포 뒤 통과만 확인)
+- 브라우저(VM Firefox)에서 Run → 결과 표시와 네트워크 탭 외부 요청 0개는 **미확인** (아래 수동 절차)
+- `npm audit`: monaco-editor 0.57.0 → dompurify(≤3.4.15) low 2건 (IN_PLACE 사용 경로, 우리 코드는 해당 API 미사용). 0.56.0 으로 내리면 해소된다고 나오지만 breaking 이라 그대로 둠
+- 번들 index js 2.9MB (monaco 전체 editor.api). 코드 분할은 범위 밖
+
+### 수동 확인 절차 (VM Firefox)
+1. `rsync -a --delete --exclude .git --exclude node_modules --exclude dist ./ lgtm-vm:~/lgtm-fe/` 후 `ssh lgtm-vm 'cd ~/lgtm-fe && make deploy-frontend && bash scripts/verify/m4-01.sh'`
+2. Firefox `http://lgtm.local` → 개발자 도구 네트워크 탭을 연 채 새로고침 → Run → status/stdout 표시
+3. 네트워크 탭의 모든 요청 도메인이 `lgtm.local` 하나인지 확인 (외부 도메인 0개)
+
+### merge 체크리스트
+1. F-M2-01 merge 후 main 을 rebase 하고 Makefile 충돌을 해결한다 (이 브랜치는 Makefile 맨 아래에만 추가)
+2. 본 `build` / `deploy` 타겟에 frontend 를 통합한다 (build 에 `build-frontend.sh`, deploy 에 frontend.yaml apply + `rollout status`, `k8s/dummy/lgtm.yaml` 제거와 dummy-lgtm delete 줄 정리, 그 뒤 `deploy-frontend` 는 제거하거나 별칭으로)
+3. merge 후 `make clean && make` 로 새로 올려 `lgtm.local /` 가 frontend 인지 확인 (`curl -s lgtm.local | grep 'id="root"'`, `m4-01.sh`)
+
+### 다음 단계
+F-M4-02 result-display (FE-05~FE-10: 상태별 에러, IPFS 링크, 공개 안내, trace_id, 413/429)
+
 ## F-M1-04 metrics-exemplar (브랜치 feat/m1-04-metrics-exemplar)
 
 ### 한 일

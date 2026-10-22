@@ -101,3 +101,15 @@ re:
 # 변수 조회용 (scripts/verify 에서 사용): make -s print-K3D_VERSION
 print-%:
 	@echo '$($*)'
+
+# ---- F-M4-01 frontend 전용 (병렬 작업 중 본 build/deploy 에 통합하지 않음. merge 후 통합: HANDOFF 체크리스트) ----
+FRONTEND_IMAGE = lgtm-frontend:src-$(shell bash scripts/image-tag.sh frontend)
+.PHONY: deploy-frontend
+# 이미지 빌드/import → apply → dummy-lgtm 정리(apply 는 prune 하지 않음) → 대기. cluster 와 backend 는 이미 떠 있어야 한다
+deploy-frontend:
+	@FRONTEND_IMAGE=$(FRONTEND_IMAGE) bash scripts/build-frontend.sh
+	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/app/00-namespace.yaml
+	@sed 's|__FRONTEND_IMAGE__|$(FRONTEND_IMAGE)|' k8s/app/frontend.yaml | kubectl --context k3d-$(CLUSTER_NAME) apply -f -
+	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-lgtm --ignore-not-found
+	@kubectl --context k3d-$(CLUSTER_NAME) -n lgtm rollout status deploy/frontend --timeout=120s
+	@bash scripts/wait-ingress.sh 60 lgtm.local

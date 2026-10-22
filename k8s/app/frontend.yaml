@@ -1,0 +1,77 @@
+# F-M4-01 frontend. image 는 make deploy-frontend 가 __FRONTEND_IMAGE__ 를 소스 hash 태그로 치환한다.
+# nginx-unprivileged(uid 101) + readOnlyRootFilesystem: 실제 기동으로 쓰기 경로는 /tmp 하나뿐임을 확인했다
+# (pid, client/proxy/fastcgi/uwsgi/scgi temp). /var/cache/nginx 는 쓰지 않는다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: lgtm
+  labels: {app: frontend}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: frontend}
+  template:
+    metadata:
+      labels: {app: frontend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: __FRONTEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: lgtm
+spec:
+  selector: {app: frontend}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+# /api 는 backend Ingress(prefix /api, 더 긴 경로)가 처리한다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: lgtm
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: lgtm.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port: {number: 80}
