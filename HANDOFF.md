@@ -10,6 +10,41 @@
 ### 다음 단계
 -->
 
+## F-M2-02 compiler-hardening (브랜치 feat/m2-02-compiler-hardening)
+
+### 한 일
+- `backend/internal/compile/denylist.go`: rustc 실행 전 소스 deny-list. raw 소스 + 주석 제거 뷰(중첩 `/* */` 인식, 문자열·raw string·char 안의 `//`는 주석 아님) 두 뷰를 모두 검사. 위반 시 422, 첫 줄 `error: LGTM 소스 정책 위반 [규칙ID] N행: 설명` (소스 줄 내용은 응답에 넣지 않음) → backend `firstErrorLine`이 그대로 `compile_error` message로 사용 (backend 수정 없음)
+- 규칙: `deny-include-macro`(include_str/include_bytes/option_env 이름 단독, `include!`, 인자 위치 `include`), `deny-env-macro`(`env!`, 인자 위치 `env`), `deny-rename`(`include|env` 뒤 `as`), `deny-mod-file`(`mod 이름;`), `deny-path-attr`(`#[..path..]`, `cfg_attr(.. path =`), `deny-incbin`(`.incbin`)
+- 인자 위치 규칙은 `use` 문을 지운 텍스트에서 찾는다 (`use std::{env, fs};` 오탐 방지). 재명명(`as`)은 원문 전체에서 잡는다
+- `runner.go`: rustc 환경변수 `rustcEnv()`로 분리, PATH/RUSTUP_HOME/CARGO_HOME/HOME/TMPDIR 5개만 (상속 없음). 단위 테스트로 키 집합과 비밀값 미포함 확인
+- `k8s/app/compiler.yaml`: `readOnlyRootFilesystem: true`, `enableServiceLinks: false`, NetworkPolicy `compiler-ingress`(app=backend → 8080), `compiler-egress`(kube-dns 53 UDP/TCP, observability/otel-collector 4317). `/tmp` emptyDir은 추가하지 않음 (VM 기동 결과로 확정, 아래)
+- `scripts/verify/m2-02.sh` (먼저 실패 상태로 커밋 e34bf0c)
+
+### 확정 결정 (PRD 변경)
+- **PRD 변경: 7.3 수용 기준 (b) = 격리 + 소스 deny-list. deny-list에 PRD에 없던 `include!` 추가.** 이유: 결과가 IPFS에 영구 공개되므로 소스 단계 차단을 추가. `include!`는 파일을 Rust 소스로 끼워 넣어 rustc 에러 메시지에 파일 내용이 찍히는 경로
+- 사용자 추가 지시로 `[(,\[{]\s*(?:\w+::)*(?:r#)?env\s*[),\]}]`(인자 위치 env)와 `deny-incbin` 포함
+
+### rustc 실측 (Mac rustc, `rustc -` 로 stdin 컴파일. VM 검증 아님, 규칙 설계 근거)
+- 동작함(= 우회 실재): `r#include_str!`, `std::r#env!`, `use std::env as e; e!(..)`, `use std::include_str as x; x!(..)`, `include_str /* /* */ */ !(..)`(중첩 주석), `m!(include_str)`/`m!(env)`/`m!(r#env)`(`$n:ident` 매개변수), `#[cfg_attr(all(), path = "..")] mod x;`
+- 동작 안 함: `$p:path` 로 `$p!(..)` ("macro expansion ignores `!`")
+
+### 한계 (의도된 오탐 / 미탐 가능성)
+- 정규식 기반이라 **문자열·주석 안의 패턴도 차단**: `println!("include_str!")`, `// env!("X")`
+- 인자 위치 규칙 때문에 **`f(env)`, `g(a, include)` 처럼 변수 이름이 env/include인 함수 인자 전달도 차단** (use 문 안은 제외). 테스트 `TestCheckSourceKnownFalsePositives`가 이 동작을 고정
+- `#[..path..]`는 속성 안 어디든 `path` 단어면 차단 (`#[doc = "path"]` 오탐)
+- 주석 제거 뷰는 완전한 lexer가 아님. 그래서 raw 뷰와 함께 검사한다. 정적 패턴은 완전하지 않으며 **최종 방어는 격리 계층**(read-only rootfs, 환경변수 명시 목록, SA 토큰 없음, NetworkPolicy)
+
+### 된 것 / 안 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| deny-list 차단/통과 단위 테스트, rustcEnv 5개 키, 핸들러가 rustc 실행 전 422 | `go test ./internal/compile/` | Mac에서 통과 (참고용, 검증 아님). VM은 m2-02.sh 6번 |
+| 공격 12종 compile_error + 규칙 표시 + 유출 없음, 정상 예제 success, 격리 계층, NetworkPolicy 강제 실측(+정책 삭제 대조군), readOnlyRootFilesystem 상태 `\0asm`, m2-01, verify-m1 | `scripts/verify/m2-02.sh` | **미실행 (VM 비었음 신호 대기)** |
+| `make clean && make` exit 0 / 재실행 exit 0 | VM, nohup + polling | **미실행** |
+| k3s NetworkPolicy 강제 여부, kubelet probe가 ingress 정책에 막히는지, `/tmp` emptyDir 필요 여부 | VM 실측 | **미확인** |
+
+### 다음 단계
+- VM 검증 후 이 블록 갱신, 이어서 F-M2-03 wasmtime-exec
+
 ## F-M4-02 result-display (브랜치 feat/m4-02-result-display)
 
 ### 한 일
