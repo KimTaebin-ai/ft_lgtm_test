@@ -10,6 +10,40 @@
 ### 다음 단계
 -->
 
+## F-M3-01 kubo-node (브랜치 feat/m3-01-kubo-node)
+
+### 한 일
+- `k8s/ipfs/kubo.yaml`: `ipfs/kubo:v0.43.1`(GitHub releases latest 2026-09-15, Docker Hub amd64/arm64 확인), StatefulSet 1 + PVC 5Gi, Service `kubo-api`(5001) / `kubo-gateway`(8080) 분리, Ingress `ipfs.lgtm.local` → gateway 8080 만, hostPort 4001 tcp/udp, NetworkPolicy `kubo-ingress`(5001 ← ns lgtm + app=backend 만, 8080·4001 은 전체)
+- 설정은 ConfigMap `kubo-init` 의 `/container-init.d/001-lgtm-config.sh` 가 매 기동 적용 (수동 설정 없음): path gateway(`UseSubdomains=false`), `Gateway.NoFetch=true`, `Swarm.ConnMgr` basic 20/60/20s, `Swarm.ResourceMgr.MaxMemory=512MiB`·`MaxFileDescriptors=4096`, `Datastore.StorageMax=4GB`, `AutoTLS.Enabled=false`. 유지: DHT, bootstrap, AutoConf, relay client, UPnP. env `IPFS_TELEMETRY=off`, `DO_NOT_TRACK=1`, `GOMEMLIMIT=800MiB`
+- securityContext: runAsNonRoot(uid 1000), allowPrivilegeEscalation false, drop ALL, seccomp RuntimeDefault, automountServiceAccountToken false, enableServiceLinks false. **readOnlyRootFilesystem=true 로 동작** (쓰기 경로는 `/data/ipfs` PVC 와 `/tmp` emptyDir 뿐. VM 에서 기동·add·재시작 정상, 루트 쓰기 실패 확인)
+- resources: request 100m/256Mi, limit 1 CPU/1Gi
+- `k8s/dummy/ipfs.yaml` 삭제, Makefile deploy 에서 `dummy-ipfs` 를 `delete --ignore-not-found`, 순서 observability → ipfs → app. dummy namespace 는 비어 있는 채로 남음. `wait-ingress` 의 ipfs 기대값은 `ipfs.lgtm.local/ipfs/bafkqaaa`(빈 identity CID)가 200
+- `scripts/verify/m3-01.sh`(먼저 실패 상태로 커밋 123faa5), `make verify` 순서에 m3-01 추가 (m2-02 뒤)
+
+### 된 것 (검증표, 모두 VM `lgtm-vm`, 로그 `~/lgtm-logs/m3-01-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make clean && make` exit 0 | `m3-01-final.log` | **첫 실행 exit 2 (실패)**: observability 단계에서 `grafana/mimir:3.2.2` pull 이 `registry-1.docker.io` timeout (DeadlineExceeded), tempo rollout 300s 초과. kubo 단계 도달 전. 같은 체인의 바로 다음 `make` 는 exit 0 |
+| 재실행 `make` exit 0 | 같은 로그 `MAKE2_EXIT=0`, 추가로 한 번 더 `m3-01-make3.log` `MAKE3_EXIT=0` | 확인(VM) |
+| 이전 실행(kubo 단계 포함 `make clean && make` + 재실행, `m3-01-make.log`) | startupProbe 405 로 두 번 다 실패 → 수정 후 | 아래 "실패 이력" |
+| `make verify` 전체 exit 0 (m1-01~m4-02, m3-01 포함) | `m3-01-final.log` `VERIFY_EXIT=0` | 확인(VM) |
+| `m3-01.sh` ALL PASS: pod Ready/limit/PVC Bound/securityContext/uid 1000/telemetry off, 설정 키, ipfs add → gateway 200(301 아님)+내용 일치, 디렉토리 목록, `/api/v0/id` 404(POST·GET), Ingress 에 5001 없음, 없는 CID → 404 (0s), swarm peers 20, listen tcp/4001·quic-v1, hostPort, 호스트 4001 tcp/udp listen, 호스트 127.0.0.1:4001 에서 multistream 응답, pod 삭제 후 같은 CID·pin 유지 | `make verify` 안 m3-01 | 확인(VM) |
+| NetworkPolicy 강제: 다른 ns pod → 5001 실패, lgtm/app=backend 라벨 pod → 5001 성공, 다른 ns → gateway 8080 성공, 정책 삭제 시 같은 pod 연결 **성공**(대조군), 복구 후 다시 실패 | m3-01.sh 7번 | 확인(VM) |
+| Kubo 메모리 실측 | `kubectl top pod -n ipfs` | 53Mi / 50m (최종 `make` 후 idle), 90Mi / 133m (add·pin·peers 20 직후 측정). limit 1Gi, 재시작 0. 계획 예상 150~350MB 보다 낮음 |
+| `ipfs.io` 등 외부 gateway 에서 CID 도달 | — | **미확인** (F-M3-03) |
+| NAT 너머 4001 도달 (UTM/공유기 포워딩) | — | **미확인** (F-M3-03). 확인한 것은 VM 호스트 127.0.0.1:4001 까지 |
+
+### 실패 이력 / 열린 문제
+- 1차(`m3-01-make.log`): kubo startupProbe `httpGet /api/v0/version` 이 405 (Kubo `/api/v0/*` 는 POST 전용). 데몬은 `Daemon is ready` 였지만 probe 실패로 재시작 반복 → `tcpSocket: api` 로 수정 (커밋 fix: kubo startupProbe). 주의: StatefulSet 은 Ready 아닌 pod 를 롤링 업데이트하지 않아서 `kubectl delete pod kubo-0` 이 필요했다
+- 2차: m3-01.sh 가 `lgtm-probe` ns 를 m2-02 와 공유 → m2-02 cleanup(`--wait=false`)이 아직 terminating 이라 probe pod 생성 실패. 그 상태에서 "차단" 검사가 pod 없음 때문에 **거짓 PASS** 가 됐다. 전용 ns `ipfs-probe` + 삭제 대기 + exec 가능 단언 추가. k3s 노드 컨테이너에 `nc` 없음 → 호스트에서 multistream 헤더 송수신으로 변경
+- 최종 체인 첫 `make` 실패(위 표)는 Docker Hub pull timeout 으로 이번 변경과 무관해 보이나, 같은 VM 네트워크 문제가 새 VM 첫 `make` 에서 재발하면 감점 위험. 이미지 pull 재시도/사전 pull 은 이번 범위 밖이라 손대지 않음
+- `scripts/verify/m0-02.sh` 는 dummy ns 에 파드 3개 이상을 기대한다 (`make verify` 에 없는 스크립트). 이번에 수정하지 않았고 현재 통과하지 않을 것으로 예상 (실행해 보지 않음)
+- 로그에 `failed to sufficiently increase receive buffer size` (quic-go UDP 버퍼, 208KiB). 기능에는 영향 없었으나 QUIC 처리량은 줄 수 있음. `net.core.rmem_max` 는 VM 호스트 설정이라 건드리지 않음
+- PRD 변경 없음
+
+### 다음 단계
+- F-M3-02 ipfs-upload: backend 가 `kubo-api.ipfs.svc.cluster.local:5001` 로 업로드 (NetworkPolicy 는 이미 lgtm/app=backend 허용). backend egress 정책이 생기면 5001 허용 필요. `ipfs.cid` attribute, 10s timeout
+
 ## F-M2-02 compiler-hardening (브랜치 feat/m2-02-compiler-hardening)
 
 ### 한 일
