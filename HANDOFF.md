@@ -34,16 +34,32 @@
 - `#[..path..]`는 속성 안 어디든 `path` 단어면 차단 (`#[doc = "path"]` 오탐)
 - 주석 제거 뷰는 완전한 lexer가 아님. 그래서 raw 뷰와 함께 검사한다. 정적 패턴은 완전하지 않으며 **최종 방어는 격리 계층**(read-only rootfs, 환경변수 명시 목록, SA 토큰 없음, NetworkPolicy)
 
-### 된 것 / 안 된 것 (검증표)
+### verify 구조 정리 (F-M4-02 후속 요청)
+- verify 스크립트는 다른 verify 스크립트를 호출하지 않는다: m1-03의 m1-01/02 호출, m2-01의 `make verify-m1` 호출 제거, m2-02는 처음부터 호출하지 않음
+- Makefile: `make verify` = m1-01 → m1-02 → m1-03 → m1-04 → m2-01 → m2-02 → m4-01 → m4-02 순차, 첫 실패에서 중단하고 FAIL 줄 출력. `make verify-m1`은 m1만. 둘 다 `run_verify` 매크로 공유
+- `scripts/verify/lib-pf.sh`(공용 `pf_forward`/`pf_stop`): kubectl이 실제로 로컬 포트를 열었는지(`Forwarding from 127.0.0.1:PORT`)와 **포트마다 HTTP 응답(코드 != 000)** 을 확인한 뒤 반환. kubectl이 죽으면 출력을 stderr로 남긴다. 스크립트별 로컬 포트 대역을 분리(기존 값 + 1000×스크립트 번호)
+- **관찰된 사실**: 정리 전 구조로 처음 `make verify`를 돌렸을 때 m1-01 재기동 단계에서 `address already in use`(19080/14100/14200)로 실패했고, 그 포트를 `kubectl port-forward` 프로세스 3개가 점유 중이었다(스크립트 종료 후에도 생존). 원인은 `k()` 함수를 `&`로 띄우면 `$!`가 subshell PID라 `kill`이 kubectl에 닿지 않는 것. kubectl을 직접 띄우고 `pkill -P`로 자식도 정리하도록 고친 뒤 재현되지 않음. **m2-01 안 verify-m1의 m1-02 code=000 두 번 실패가 이 원인인지는 이번에 재현·증명하지 않았다** (중첩 호출 제거 + 포트 대역 분리 + HTTP 확인으로 구조적으로 막았을 뿐)
+
+### 된 것 / 안 된 것 (검증표, 모두 VM `lgtm-vm`, 로그 `~/lgtm-logs/m2-02-*.log`)
 | 주장 | 확인 방법 | 결과 |
 |---|---|---|
-| deny-list 차단/통과 단위 테스트, rustcEnv 5개 키, 핸들러가 rustc 실행 전 422 | `go test ./internal/compile/` | Mac에서 통과 (참고용, 검증 아님). VM은 m2-02.sh 6번 |
-| 공격 12종 compile_error + 규칙 표시 + 유출 없음, 정상 예제 success, 격리 계층, NetworkPolicy 강제 실측(+정책 삭제 대조군), readOnlyRootFilesystem 상태 `\0asm`, m2-01, verify-m1 | `scripts/verify/m2-02.sh` | **미실행 (VM 비었음 신호 대기)** |
-| `make clean && make` exit 0 / 재실행 exit 0 | VM, nohup + polling | **미실행** |
-| k3s NetworkPolicy 강제 여부, kubelet probe가 ingress 정책에 막히는지, `/tmp` emptyDir 필요 여부 | VM 실측 | **미확인** |
+| `make clean && make` exit 0 | nohup, `m2-02-make1.log` `MAKE_EXIT=0` | 확인(VM) |
+| 재실행 `make` exit 0 | `m2-02-make2.log` | 확인(VM), `MAKE_EXIT=0` |
+| 공격 12종(include_str!/공백/core::/r#/include!/env!/`m!(env)`/`#[path]` mod/cfg_attr mod/`use as`+`x!`/중첩 주석 gap/incbin) → `compile_error` + `LGTM 소스 정책 위반 [규칙]`, 응답에 `root:x:0:0` 없음 | `m2-02.sh` 1번 | 확인(VM) |
+| 정상 예제(struct/trait/iterator/`std::env::args`/인라인 mod/`path` 변수) → success | `m2-02.sh` 2번 | 확인(VM) |
+| 격리 계층 단독: (KUBERNETES_* 제외) 다른 Service 주소·비밀값 환경변수 없음, `/var/run/secrets/kubernetes.io` 없음, 루트 FS 쓰기 실패(`/work`는 성공), 1.1.1.1:80 / backend Service / API 서버 연결 실패, otel-collector:4317 연결 성공 | `m2-02.sh` 3번 | 확인(VM) |
+| **k3s가 NetworkPolicy를 강제**: 다른 namespace pod → compiler:80 실패, 정책 2개 임시 삭제 시 같은 pod 연결 **성공**(대조군), 복구 후 다시 실패, backend → compiler `/api/execute` success | `m2-02.sh` 4번 | 확인(VM) |
+| `readOnlyRootFilesystem=true / enableServiceLinks=false / automountServiceAccountToken=false`, 이 상태에서 compile 응답 `\0asm`, `/tmp` emptyDir 없이 동작 | `m2-02.sh` 5번 | 확인(VM). `/tmp` 추가 불필요 |
+| deny-list·rustcEnv 단위 테스트 | VM golang 컨테이너 `go test ./cmd/compiler/... ./internal/...` (`m2-02.sh` 6번) | 확인(VM) |
+| `make verify`(8개 순차) exit 0 | `m2-02-verify3.log`, `m2-02-verify4.log` (연속 2회) | 확인(VM). 아래 실패 이력 참고 |
+
+### 안 된 것 / 열린 문제 / 실패 이력
+- `make verify` 실패 이력: (1) 1번째: m1-01 포트 점유(위 원인, 수정함). (2) 2번째: m2-02 환경변수 검사가 `KUBERNETES_PORT_443_TCP=tcp://10.43.0.1:443`에 걸림 → 아래 항목. 수정 후 3회, 4회 연속 통과
+- **`enableServiceLinks: false`로도 `KUBERNETES_*` 8개(SERVICE_HOST/PORT/PORT_443_TCP* 등)는 K8s가 항상 주입한다** (VM `env` 실측: 그 외 Service 변수는 없음). 그래서 m2-02 검사를 "KUBERNETES_* 제외 다른 Service 주소·비밀값 없음"으로 바꾸고, API 서버(`KUBERNETES_SERVICE_HOST:443`) 연결 실패를 별도로 확인(실측: Connection refused). rustc 프로세스 환경에는 이 변수들이 없다 (`rustcEnv` 5개 키 단위 테스트). 지시한 기준 "환경변수 목록에 다른 Service 주소 없음"을 K8s 동작에 맞게 좁힌 것이므로 이의가 있으면 알려 달라
+- 15초 timeout은 VM에서 재현하지 않았고 단위 테스트 유지 (선택 항목, 시도하지 않음)
 
 ### 다음 단계
-- VM 검증 후 이 블록 갱신, 이어서 F-M2-03 wasmtime-exec
+- F-M2-03 wasmtime-exec
 
 ## F-M4-02 result-display (브랜치 feat/m4-02-result-display)
 
