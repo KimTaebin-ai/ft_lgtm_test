@@ -42,7 +42,7 @@ n_all="$(images_of all | wc -l)"
 for r in workload build infra; do
 	[ "$(images_of "$r" | wc -l)" -gt 0 ] && pass "images.txt role=$r 있음" || fail "images.txt 에 role=$r 항목 없음"
 done
-grep -qE ':latest( |$)' "$ROOT/images.txt" && fail "images.txt 에 :latest 태그가 있음" || pass "images.txt 에 :latest 없음"
+images_of all | grep -qE ':latest$' && fail "images.txt 에 :latest 태그가 있음" || pass "images.txt 에 :latest 없음"
 
 missing=""
 while read -r img; do

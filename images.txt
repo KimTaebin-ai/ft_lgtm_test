@@ -1,5 +1,5 @@
 # 외부 이미지 목록 (단일 출처). 형식: <role> <image:tag>   (:latest 금지)
-#   workload : 클러스터에서 실행. docker host 로 pull 후 k3d image import (scripts/import-images.sh)
+#   workload : 클러스터에서 실행. docker host 로 pull 후 노드 containerd 로 import (scripts/import-images.sh)
 #   build    : docker build 의 FROM base. docker host 에만 있으면 된다
 #   infra    : k3d cluster create / k3d image import 가 docker 로 직접 쓰는 이미지 (cluster 생성 전에 pull)
 # manifest/Dockerfile/Makefile 과의 일치는 scripts/check-images.sh 가 검사한다.
