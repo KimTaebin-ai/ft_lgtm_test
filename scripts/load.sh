@@ -37,7 +37,7 @@ done
 declare -A CODE=(
 	[ok]='fn main() { println!(\"hello\"); }'
 	[slow]='fn main() { /* __slow__ */ }'
-	[fail]='fn main() { /* __fail_compile__ */ }'
+	[fail]='fn main() { let x = ; /* __fail_compile__ */ }'
 )
 declare -A SENT=([ok]=0 [slow]=0 [fail]=0) BAD=([ok]=0 [slow]=0 [fail]=0)
 

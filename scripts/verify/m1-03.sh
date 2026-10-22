@@ -118,7 +118,7 @@ v="$(printf '%s' "$OK_BODY" | pyj "d['status']")"
 TRACE_ID="$(printf '%s' "$OK_BODY" | pyj "d['trace_id']")"
 [ "${#TRACE_ID}" = "32" ] && pass "trace_id 32자 hex" || fail "trace_id='${TRACE_ID}'"
 
-# ---- 3. Tempo: span 4개, root 이름, parent, TR-03 attribute ----
+# ---- 3. Tempo: span 5개 (F-M2-01: compiler 의 rustc span 추가), root 이름, parent, TR-03 attribute ----
 pf_ok=1
 pf_start loki "$P_LOKI:3100" || pf_ok=0
 pf_start tempo "$P_TEMPO:3200" || pf_ok=0
@@ -135,15 +135,15 @@ tempo_spans() { # <trace_id> <기대 span 수> → 최대 60s 폴링 후 요약 
 	printf '%s' "$out"
 }
 
-SPANS="$(tempo_spans "$TRACE_ID" 4)"
+SPANS="$(tempo_spans "$TRACE_ID" 5)"
 n="$(printf '%s' "$SPANS" | pyj "len(d)")"
-[ "$n" = "4" ] && pass "Tempo: span 4개" || fail "Tempo: span 수='${n}' (기대 4)"
+[ "$n" = "5" ] && pass "Tempo: span 5개" || fail "Tempo: span 수='${n}' (기대 5)"
 ROOT_NAME="$(printf '%s' "$SPANS" | pyj "[s['name'] for s in d if not s['parent']][0]")"
 [ "$ROOT_NAME" = "POST /api/execute" ] && pass "root span 이름 정확히 'POST /api/execute'" || fail "root span 이름='${ROOT_NAME}'"
 v="$(printf '%s' "$SPANS" | pyj "sorted(s['name'] for s in d if s['parent'])")"
-[ "$v" = "['compile', 'execute', 'ipfs.upload']" ] && pass "자식 span: $v" || fail "자식 span='${v}'"
-v="$(printf '%s' "$SPANS" | pyj "all(s['parent']==[r for r in d if not r['parent']][0]['id'] for s in d if s['parent'])")"
-[ "$v" = "True" ] && pass "나머지 3개의 parent = root" || fail "parent 관계 불일치 ($v)"
+[ "$v" = "['compile', 'execute', 'ipfs.upload', 'rustc']" ] && pass "자식 span: $v" || fail "자식 span='${v}'"
+v="$(printf '%s' "$SPANS" | pyj "all(s['parent']==[r for r in d if not r['parent']][0]['id'] for s in d if s['parent'] and s['name']!='rustc')")"
+[ "$v" = "True" ] && pass "rustc 를 뺀 나머지 3개의 parent = root" || fail "parent 관계 불일치 ($v)"
 for a in code.sha256 code.language code.size_bytes; do
 	v="$(printf '%s' "$SPANS" | pyj "'y' if '$a' in [s for s in d if not s['parent']][0]['attrs'] else ''")"
 	[ "$v" = "y" ] && pass "root attribute $a" || fail "root attribute $a 없음"
@@ -190,7 +190,7 @@ else
 fi
 
 # ---- 6. __fail_compile__ ----
-post 'fn main() { /* __fail_compile__ */ }'
+post 'fn main() { let x = ; /* __fail_compile__ */ }'
 FAIL_BODY="$(cat "$BODY_OUT")"; rm -f "$BODY_OUT"
 [ "$HTTP_CODE" = "200" ] && pass "__fail_compile__ → HTTP 200" || fail "__fail_compile__ HTTP ${HTTP_CODE}"
 v="$(printf '%s' "$FAIL_BODY" | pyj "d['status']")"
@@ -198,7 +198,7 @@ v="$(printf '%s' "$FAIL_BODY" | pyj "d['status']")"
 v="$(printf '%s' "$FAIL_BODY" | pyj "'y' if d.get('message') else ''")"
 [ "$v" = "y" ] && pass "compile_error 에 message 존재" || fail "compile_error 에 message 없음"
 FTID="$(printf '%s' "$FAIL_BODY" | pyj "d['trace_id']")"
-FSPANS="$(tempo_spans "$FTID" 3)"
+FSPANS="$(tempo_spans "$FTID" 4)"
 v="$(printf '%s' "$FSPANS" | pyj "[s['error'] for s in d if s['name']=='compile'][0]")"
 [ "$v" = "True" ] && pass "compile span status ERROR" || fail "compile span error='${v}'"
 v="$(printf '%s' "$FSPANS" | pyj "[s['error'] for s in d if s['name']=='POST /api/execute'][0]")"
@@ -208,7 +208,7 @@ v="$(printf '%s' "$FSPANS" | pyj "'y' if [s for s in d if s['name']=='compile'][
 v="$(printf '%s' "$FSPANS" | pyj "'y' if [s for s in d if s['name']=='POST /api/execute'][0]['events'] else ''")"
 [ "$v" = "y" ] && pass "root span 에 error event" || fail "root span event 없음"
 v="$(printf '%s' "$FSPANS" | pyj "sorted(s['name'] for s in d)")"
-[ "$v" = "['POST /api/execute', 'compile', 'ipfs.upload']" ] && pass "compile 실패 trace span 3개 (execute 생략, ipfs.upload 수행)" || fail "compile 실패 trace span='${v}'"
+[ "$v" = "['POST /api/execute', 'compile', 'ipfs.upload', 'rustc']" ] && pass "compile 실패 trace span 4개 (execute 생략, ipfs.upload 수행)" || fail "compile 실패 trace span='${v}'"
 
 # ---- 7. __slow__ : 전체 2~3초 ----
 t0=$(date +%s.%N)

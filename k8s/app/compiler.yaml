@@ -1,0 +1,45 @@
+# F-M2-01 compiler. image 는 make deploy 가 __COMPILER_IMAGE__ 를 소스 hash 태그로 치환한다. Ingress 없음 (ClusterIP only).
+# resources: SEC-10 변경(PRD 변경) — 동시 compile 2개 합계 limit 2Gi, request 256Mi.
+# 하드닝(readOnlyRootFilesystem, NetworkPolicy, deny-list)은 F-M2-02.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: compiler, namespace: lgtm, labels: {app: compiler}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: compiler}}
+  template:
+    metadata: {labels: {app: compiler}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: compiler
+          image: __COMPILER_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+          readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+          livenessProbe:  {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10, periodSeconds: 10}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+      volumes:
+        - name: work
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: compiler, namespace: lgtm, labels: {app: compiler}}
+spec:
+  type: ClusterIP
+  selector: {app: compiler}
+  ports:
+    - {name: http, port: 80, targetPort: http}

@@ -1,5 +1,5 @@
-// Package execute는 POST /api/execute stub이다. compile/execute/ipfs.upload를 sleep으로 흉내 낸다.
-// F-M2-01, F-M2-03에서 실제 구현으로 교체된다.
+// Package execute는 POST /api/execute 핸들러다. compile은 compiler 서비스를 호출하고(F-M2-01),
+// execute/ipfs.upload는 아직 sleep stub이다 (F-M2-03, F-M3-02에서 교체).
 package execute
 
 import (
@@ -26,10 +26,16 @@ import (
 // RootSpanName은 TR-06: otelhttp 기본값에 의존하지 않고 코드에서 명시한다.
 const RootSpanName = "POST /api/execute"
 
-// stub 트리거 (F-M1-04 exemplar 테스트, frontend 개발용)
+// stub 트리거. __slow__는 execute/ipfs stub의 sleep을 늘려 전체를 2~3초로 만든다 (compile은 실제 시간).
+// __fail_compile__ 분기는 없다: compile이 실제 rustc라 문법 오류 코드를 보내면 된다.
+const triggerSlow = "__slow__"
+
+// 응답 status. compile_error는 사용자 코드 원인(rustc 에러, compile timeout), internal_error는 플랫폼 원인이다.
+// 둘을 나눠야 lgtm_executions{status}와 trace에서 장애와 사용자 오류를 구분할 수 있다 (PRD 6.2 변경).
 const (
-	triggerFailCompile = "__fail_compile__"
-	triggerSlow        = "__slow__"
+	statusSuccess       = "success"
+	statusCompileError  = "compile_error"
+	statusInternalError = "internal_error"
 )
 
 type request struct {
@@ -57,14 +63,16 @@ type response struct {
 }
 
 type handler struct {
-	log     *slog.Logger
-	tracer  trace.Tracer
-	metrics *telemetry.Metrics
+	log      *slog.Logger
+	tracer   trace.Tracer
+	metrics  *telemetry.Metrics
+	compiler *compilerClient
 }
 
 // NewHandler는 root span(RootSpanName)을 만드는 otelhttp 래퍼까지 포함한 http.Handler를 반환한다.
-func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics) http.Handler {
-	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m}
+// compilerURL은 compiler의 POST /compile 전체 URL이다.
+func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics, compilerURL string) http.Handler {
+	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m, compiler: newCompilerClient(compilerURL)}
 	return otelhttp.NewHandler(h, RootSpanName,
 		otelhttp.WithTracerProvider(tp),
 		otelhttp.WithPropagators(propagation.TraceContext{}),
@@ -96,27 +104,38 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	h.log.InfoContext(ctx, "execute request received", "code_size_bytes", len(req.Code))
 
-	resp := response{Status: "success", TraceID: root.SpanContext().TraceID().String()}
-	cSleep, eSleep, iSleep := stepDurations(strings.Contains(req.Code, triggerSlow))
+	resp := response{Status: statusSuccess, TraceID: root.SpanContext().TraceID().String()}
+	slow := strings.Contains(req.Code, triggerSlow)
 
-	// compile
+	// compile: compiler 서비스 호출. step의 span ctx로 호출해야 rustc span의 parent가 compile이 된다.
+	var wasm []byte
 	var cErr error
-	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, cSleep, func(ctx context.Context, _ trace.Span) error {
+	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, 0, func(ctx context.Context, span trace.Span) error {
+		var err error
 		h.log.InfoContext(ctx, "compile started")
-		if strings.Contains(req.Code, triggerFailCompile) {
-			return errors.New("stub: error[E0425]: cannot find value `__fail_compile__` in this scope")
+		wasm, err = h.compiler.compile(ctx, req.Code)
+		if err == nil {
+			span.SetAttributes(attribute.Int("wasm.size_bytes", len(wasm)))
+			h.log.InfoContext(ctx, "compile finished", "wasm_bytes", len(wasm))
 		}
-		h.log.InfoContext(ctx, "compile finished")
-		return nil
+		return err
 	})
+	eSleep, iSleep := stepDurations(slow, time.Duration(resp.TimingsMS.Compile)*time.Millisecond)
 	if cErr != nil {
-		resp.Status = "compile_error"
-		resp.Message = cErr.Error()
-		resp.Stderr = cErr.Error() + "\n"
+		var ue *userError
+		if errors.As(cErr, &ue) {
+			resp.Status = statusCompileError
+			resp.Message = ue.Message
+			resp.Stderr = ue.Stderr
+		} else {
+			resp.Status = statusInternalError
+			resp.Message = "internal error: " + cErr.Error()
+		}
 		root.RecordError(cErr)
-		root.SetStatus(codes.Error, cErr.Error())
+		root.SetStatus(codes.Error, resp.Message)
 	} else {
-		// execute
+		// execute (stub). wasm은 F-M2-03에서 Wasmtime에 넘긴다.
+		_ = wasm
 		resp.TimingsMS.Execute, _ = h.step(ctx, "execute", trace.SpanKindInternal, eSleep, func(ctx context.Context, span trace.Span) error {
 			h.log.InfoContext(ctx, "execute started")
 			resp.Stdout = "stub output\n"
@@ -143,13 +162,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// step은 자식 span 하나를 만들고 d만큼 sleep한 뒤 fn을 실행한다.
+// step은 자식 span 하나를 만들고 d만큼 sleep한 뒤(d가 0이면 생략) fn을 실행한다.
 // fn이 error를 반환하면 span을 ERROR로 표시하고 메시지를 event로 남긴다 (TR-02).
 func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, d time.Duration, fn func(context.Context, trace.Span) error) (int64, error) {
 	ctx, span := h.tracer.Start(ctx, name, trace.WithSpanKind(kind))
 	defer span.End()
 	start := time.Now()
-	err := sleep(ctx, d)
+	var err error
+	if d > 0 {
+		err = sleep(ctx, d)
+	}
 	if err == nil {
 		err = fn(ctx, span)
 	}
@@ -171,13 +193,15 @@ func (h *handler) invalid(ctx context.Context, w http.ResponseWriter, msg string
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "invalid_request", "message": msg})
 }
 
-// stepDurations: 평소 compile 20~40ms, execute 10~30ms, ipfs 50~100ms. slow면 합계 2~3초.
-func stepDurations(slow bool) (compile, exec, ipfs time.Duration) {
+// stepDurations: 평소 execute 10~30ms, ipfs 50~100ms (stub).
+// slow면 compile 실제 소요를 포함한 전체가 2~3초가 되도록 남은 시간을 execute/ipfs에 반반 나눈다 (최소 200ms).
+func stepDurations(slow bool, compileElapsed time.Duration) (exec, ipfs time.Duration) {
 	if slow {
-		total := 2000 + rand.IntN(1000)
-		return ms(total * 4 / 10), ms(total * 3 / 10), ms(total * 3 / 10)
+		rest := ms(2000+rand.IntN(1000)) - compileElapsed
+		rest = max(rest, ms(200))
+		return rest / 2, rest / 2
 	}
-	return ms(20 + rand.IntN(21)), ms(10 + rand.IntN(21)), ms(50 + rand.IntN(51))
+	return ms(10 + rand.IntN(21)), ms(50 + rand.IntN(51))
 }
 
 func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }

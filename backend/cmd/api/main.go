@@ -16,6 +16,9 @@ import (
 	"lgtm/backend/internal/telemetry"
 )
 
+// defaultCompilerURL은 같은 namespace(lgtm)의 compiler Service다. COMPILER_URL로 바꿀 수 있다.
+const defaultCompilerURL = "http://compiler.lgtm.svc.cluster.local/compile"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
@@ -27,7 +30,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tel, err := telemetry.Setup(ctx)
+	tel, err := telemetry.Setup(ctx, telemetry.ServiceName)
 	if err != nil {
 		return fmt.Errorf("telemetry: %w", err)
 	}
@@ -40,7 +43,11 @@ func run() error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics))
+	compilerURL := os.Getenv("COMPILER_URL")
+	if compilerURL == "" {
+		compilerURL = defaultCompilerURL
+	}
+	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics, compilerURL))
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

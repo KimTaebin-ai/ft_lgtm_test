@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	ServiceName     = "lgtm-backend"
-	defaultEndpoint = "otel-collector.observability:4317"
+	// ServiceName은 backend의 service.name이자 metric meter 이름이다.
+	ServiceName = "lgtm-backend"
+	// CompilerServiceName은 compiler pod의 service.name (F-M2-01).
+	CompilerServiceName = "lgtm-compiler"
+	defaultEndpoint     = "otel-collector.observability:4317"
 
 	// PeriodicReader 기본값은 60초(sdk/metric v1.47.0 periodic_reader.go defaultInterval)라 대시보드와 exemplar가 1분 늦는다.
 	metricExportInterval = 5 * time.Second
@@ -40,13 +43,13 @@ type Telemetry struct {
 
 // Setup은 OTLP gRPC exporter(Collector)로 trace/metric/log를 보내도록 구성한다.
 // endpoint는 OTLP_ENDPOINT 환경변수, 없으면 otel-collector.observability:4317.
-func Setup(ctx context.Context) (*Telemetry, error) {
+func Setup(ctx context.Context, serviceName string) (*Telemetry, error) {
 	endpoint := os.Getenv("OTLP_ENDPOINT")
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
 	res, err := resource.New(ctx,
-		resource.WithAttributes(attribute.String("service.name", ServiceName)),
+		resource.WithAttributes(attribute.String("service.name", serviceName)),
 		resource.WithTelemetrySDK(),
 	)
 	if err != nil {
@@ -59,7 +62,7 @@ func Setup(ctx context.Context) (*Telemetry, error) {
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(texp), sdktrace.WithResource(res))
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{}) // W3C traceparent (F-M2-01 대비)
+	otel.SetTextMapPropagator(propagation.TraceContext{}) // W3C traceparent (backend→compiler 전파)
 
 	lexp, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(endpoint), otlploggrpc.WithInsecure())
 	if err != nil {
@@ -85,7 +88,7 @@ func Setup(ctx context.Context) (*Telemetry, error) {
 	}
 
 	logger := slog.New(slog.NewMultiHandler(
-		otelslog.NewHandler(ServiceName, otelslog.WithLoggerProvider(lp)),
+		otelslog.NewHandler(serviceName, otelslog.WithLoggerProvider(lp)),
 		NewCtxJSONHandler(os.Stdout, nil),
 	))
 	return &Telemetry{Logger: logger, TracerProvider: tp, MeterProvider: mp, Metrics: metrics, lp: lp}, nil

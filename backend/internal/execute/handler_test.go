@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -18,6 +20,46 @@ import (
 
 	"lgtm/backend/internal/telemetry"
 )
+
+func init() {
+	// 운영에서는 telemetry.Setup이 설정한다. compiler 호출의 traceparent 주입 검증에 필요하다.
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+}
+
+const (
+	wasmMagic = "\x00asm\x01\x00\x00\x00"
+	syntaxErr = "SYNTAX_ERR" // fake compiler가 이 문자열이 있으면 rustc 실패(422)를 흉내 낸다
+)
+
+// fakeCompiler는 소스에 syntaxErr가 있으면 422, 아니면 최소 wasm 헤더를 반환한다. 받은 traceparent를 기록한다.
+type fakeCompiler struct {
+	srv         *httptest.Server
+	traceparent chan string
+}
+
+func newFakeCompiler(t *testing.T, h http.HandlerFunc) *fakeCompiler {
+	t.Helper()
+	fc := &fakeCompiler{traceparent: make(chan string, 8)}
+	fc.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case fc.traceparent <- r.Header.Get("traceparent"):
+		default:
+		}
+		if h != nil {
+			h(w, r)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), syntaxErr) {
+			http.Error(w, "error: expected expression, found `;`\n --> main.rs:1:1\n", http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/wasm")
+		_, _ = w.Write([]byte(wasmMagic))
+	}))
+	t.Cleanup(fc.srv.Close)
+	return fc
+}
 
 func newServer(t *testing.T) (*httptest.Server, *tracetest.SpanRecorder) {
 	t.Helper()
@@ -27,6 +69,11 @@ func newServer(t *testing.T) (*httptest.Server, *tracetest.SpanRecorder) {
 
 func newServerWithMetrics(t *testing.T) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
 	t.Helper()
+	return newServerFor(t, newFakeCompiler(t, nil).srv.URL)
+}
+
+func newServerFor(t *testing.T, compilerURL string) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
+	t.Helper()
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	reader := sdkmetric.NewManualReader()
@@ -34,7 +81,7 @@ func newServerWithMetrics(t *testing.T) (*httptest.Server, *tracetest.SpanRecord
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m))
+	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL))
 	t.Cleanup(srv.Close)
 	return srv, rec, reader
 }
@@ -104,9 +151,12 @@ func TestSuccessSchemaAndSpans(t *testing.T) {
 
 func TestFailCompile(t *testing.T) {
 	srv, rec := newServer(t)
-	resp, m := post(t, srv.URL, codeBody(`fn main() { /* __fail_compile__ */ }`))
-	if resp.StatusCode != 200 || m["status"] != "compile_error" || m["message"] == "" {
+	resp, m := post(t, srv.URL, codeBody(`fn main() { let x = ; /* `+syntaxErr+` */ }`))
+	if resp.StatusCode != 200 || m["status"] != "compile_error" || m["message"] != "error: expected expression, found `;`" {
 		t.Fatalf("응답 이상: %d %v", resp.StatusCode, m)
+	}
+	if s, _ := m["stderr"].(string); !strings.Contains(s, "main.rs:1:1") {
+		t.Errorf("stderr 에 rustc 메시지 전체가 없음: %q", s)
 	}
 	names := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range rec.Ended() {
@@ -120,6 +170,87 @@ func TestFailCompile(t *testing.T) {
 		if s.Status().Code.String() != "Error" || len(s.Events()) == 0 {
 			t.Errorf("%s: status=%v events=%d", n, s.Status().Code, len(s.Events()))
 		}
+	}
+}
+
+func TestTraceparentParentIsCompileSpan(t *testing.T) {
+	fc := newFakeCompiler(t, nil)
+	srv, rec, _ := newServerFor(t, fc.srv.URL)
+	_, m := post(t, srv.URL, codeBody(`fn main() {}`))
+	tp := <-fc.traceparent
+	var compileID string
+	for _, s := range rec.Ended() {
+		if s.Name() == "compile" {
+			compileID = s.SpanContext().SpanID().String()
+		}
+		// transport 가 client span 을 따로 만들면 parent 가 어긋난다: 이름이 compile 인 span 은 하나뿐이어야 한다.
+	}
+	want := "00-" + m["trace_id"].(string) + "-" + compileID + "-01"
+	if tp != want {
+		t.Errorf("traceparent=%q want %q", tp, want)
+	}
+	if n := len(rec.Ended()); n != 4 {
+		t.Errorf("backend span %d개 (HTTP client span 이 추가됐나?)", n)
+	}
+}
+
+func TestCompileTimeoutIsCompileError(t *testing.T) {
+	fc := newFakeCompiler(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "compile timeout (15s)", http.StatusGatewayTimeout)
+	})
+	srv, _, _ := newServerFor(t, fc.srv.URL)
+	resp, m := post(t, srv.URL, codeBody(`fn main() {}`))
+	if resp.StatusCode != 200 || m["status"] != "compile_error" || m["message"] != "compile timeout (15s)" {
+		t.Fatalf("응답 이상: %d %v", resp.StatusCode, m)
+	}
+}
+
+// internal_error: 플랫폼 원인(연결 실패, compiler 5xx, wasm 상한 초과). HTTP 200, 스키마 동일, root span ERROR.
+func TestInternalError(t *testing.T) {
+	down := newFakeCompiler(t, nil)
+	downURL := down.srv.URL
+	down.srv.Close() // compiler 다운
+
+	cases := map[string]string{
+		"compiler 다운": downURL,
+		"compiler 500": newFakeCompiler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}).srv.URL,
+		"wasm 8MiB 초과": newFakeCompiler(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(make([]byte, maxWasmBytes+1))
+		}).srv.URL,
+	}
+	for name, url := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, rec, reader := newServerFor(t, url)
+			resp, m := post(t, srv.URL, codeBody(`fn main() {}`))
+			if resp.StatusCode != 200 || m["status"] != "internal_error" {
+				t.Fatalf("응답 이상: %d %v", resp.StatusCode, m)
+			}
+			if msg, _ := m["message"].(string); msg == "" {
+				t.Error("message 요약 없음")
+			}
+			if m["stderr"] != "" || m["stdout"] != "" {
+				t.Errorf("stderr/stdout 은 비어 있어야 함: %v", m)
+			}
+			names := map[string]sdktrace.ReadOnlySpan{}
+			for _, s := range rec.Ended() {
+				names[s.Name()] = s
+			}
+			if names["execute"] != nil || names["ipfs.upload"] == nil {
+				t.Errorf("span 구성 이상 (execute 생략, ipfs.upload 수행 기대): %v", names)
+			}
+			for _, n := range []string{"compile", "POST /api/execute"} {
+				if names[n].Status().Code.String() != "Error" {
+					t.Errorf("%s status=%v (Error 기대)", n, names[n].Status().Code)
+				}
+			}
+			sum := collect(t, reader)[telemetry.MetricExecutions].Data.(metricdata.Sum[int64])
+			st, _ := sum.DataPoints[0].Attributes.Value("status")
+			if st.AsString() != "internal_error" {
+				t.Errorf("metric status=%s", st.AsString())
+			}
+		})
 	}
 }
 
@@ -160,7 +291,7 @@ func collect(t *testing.T, r *sdkmetric.ManualReader) map[string]metricdata.Metr
 func TestMetricsNamesLabelsBucketsExemplar(t *testing.T) {
 	srv, _, reader := newServerWithMetrics(t)
 	_, ok := post(t, srv.URL, codeBody(`fn main() {}`))
-	_, bad := post(t, srv.URL, codeBody(`/* __fail_compile__ */`))
+	_, bad := post(t, srv.URL, codeBody(`/* `+syntaxErr+` */`))
 	ms := collect(t, reader)
 
 	// OTel 이름 (접미사 없음) / unit

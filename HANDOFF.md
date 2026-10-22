@@ -10,6 +10,61 @@
 ### 다음 단계
 -->
 
+## F-M2-01 compiler-service (브랜치 feat/m2-01-compiler-service)
+
+### 한 일
+- `backend/cmd/compiler` + `internal/compile`: `POST /compile`(text/plain) → rustc → 200 wasm / 422 rustc stderr / 504 timeout / 500 내부. `GET /healthz`
+- rustc: `rustc --edition 2021 --target wasm32-wasip1 -C opt-level=1 --crate-type bin --crate-name main -o out.wasm main.rs` (cwd = 요청별 임시 디렉토리, 상대 경로라 에러 메시지에 `req-XXXX` 경로가 새지 않음)
+- 요청별 `os.MkdirTemp("/work")` + `defer RemoveAll`(성공/실패/timeout/취소 공통). 시작 시 `/work` 잔여물 청소
+- timeout 15초(semaphore 획득 이후부터), `Setpgid` + `Cancel`에서 `kill(-pgid, SIGKILL)` + `WaitDelay 2s`. semaphore 2: 초과 요청은 거부하지 않고 대기 (429는 F-M2-04)
+- tracing: `otelhttp` server span 이름 `rustc`(service.name=lgtm-compiler, `telemetry.Setup(ctx, serviceName)`로 파라미터화). 로그는 backend와 같은 slog fan-out
+- backend: compile 단계를 compiler HTTP 호출로 교체. execute / ipfs.upload는 stub 유지
+- 이미지 `backend/Dockerfile.compiler`(golang:1.27.3-trixie 빌드 → `rust:1.99.1-slim-trixie` + `rustup target add wasm32-wasip1`, uid 65532). 태그 `lgtm-compiler:src-<backend/ 해시>`. `scripts/build.sh`는 두 이미지 루프, Makefile `build`/`deploy`에 compiler 추가
+- `k8s/app/compiler.yaml`: Deployment 1 / ClusterIP Service `compiler:80` / Ingress 없음 / emptyDir `/work` / request 250m·256Mi, limit 2·2Gi. backend에 `COMPILER_URL` env
+
+### 확정 결정과 이유 (PRD 변경 포함)
+- **PRD 변경 1 (SEC-10)**: "compile memory 1GB pod limit" → "compiler pod limit 2Gi(동시 2개 합계), request 256Mi". 이유: SEC-07 동시 2와 10장 1GB×2 계산에 맞춤
+- **PRD 변경 2 (6.2 status)**: `internal_error` 추가. 이유: 플랫폼 장애와 사용자 코드 오류를 metric(`lgtm_executions_total{status}`)과 trace에서 구분. 분류: rustc 422 / compile timeout 504 → `compile_error`, compiler 연결 실패 / 그 외 5xx·4xx / wasm 8MiB 초과 → `internal_error`(HTTP 200, 스키마 동일, message에 요약, stderr 비움, root span ERROR)
+- **traceparent는 `otelhttp.NewTransport`를 쓰지 않고 직접 주입**: transport가 HTTP client span을 하나 더 만들어 rustc의 parent가 compile이 아니게 된다 (PRD 8.3 트리 compile → rustc). compile span ctx에서 `otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))`, 일반 `http.Client{Timeout: 20s}`. 단위 테스트(`TestTraceparentParentIsCompileSpan`)가 traceparent의 parent == compile span id, backend span 4개(추가 client span 없음)를 확인
+- edition 2021: 널리 쓰이는 예제 코드와 호환. 2024는 `gen` 예약어·unsafe extern 등 변경 위험
+- Rust 이미지: `rust:1.99.1-slim-trixie`. 근거 URL: https://static.rust-lang.org/dist/channel-rust-stable.toml (stable 1.99.1, wasm32-wasip1 rust-std 존재), https://hub.docker.com/v2/repositories/library/rust/tags?name=slim-trixie (태그 존재)
+- backend compile timeout 20초 = compiler 15초 + 5초 여유. wasm 응답 상한 8MiB: 이후 Wasmtime 적재·IPFS 업로드와 backend 메모리 limit(128Mi) 보호. 실측 hello world는 약 2.1MB(opt-level=1, 디버그 정보 포함)
+- 트리거: `__slow__`는 유지(compile 실제 시간을 뺀 나머지를 execute/ipfs stub에 나눠 전체 2~3초). `__fail_compile__` 분기는 제거(실제 rustc 에러로 대체)
+
+### m1 verify / load.sh 수정 (최소)
+- `scripts/load.sh`, `m1-03.sh`: `__fail_compile__` 코드를 주석만 있던 것에서 `let x = ;` 문법 오류 + 마커로 변경 (이제 실제 rustc가 실패해야 compile_error)
+- `m1-03.sh`: 정상 trace span 4 → 5개(rustc 추가), 자식 span 목록에 `rustc` 포함, `rustc`는 parent가 compile이므로 "parent = root" 검사에서 제외, 실패 trace 3 → 4개
+- backend compile span에 `compile started/finished` 로그를 복구(m1-03 Loki 검사가 compile span_id 로그를 요구)
+
+### 이미지 크기 (VM `docker image ls`)
+- lgtm-compiler:src-72063c37732d **1.32GB**, lgtm-backend 177MB
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make clean && make` exit 0, 재실행 `make` exit 0 | VM, 로그 `MAKE1_OK`/`MAKE2_OK` | 확인(VM). 커밋 5ab6b79+19a25a5 기준 |
+| compiler pod Ready, limit 2/2Gi, request 256Mi, 태그 고정, Ingress 없음 | `m2-01.sh` 1번 | 확인(VM) |
+| POST /compile 200 + `\0asm`(2174529 bytes), 문법 오류 422 + rustc 메시지, 요청 후 `/work` 비어 있음 | `m2-01.sh` 2~4번 | 확인(VM) |
+| /api/execute success, Tempo service 2개, rustc parent == compile span id | `m2-01.sh` 5번 | 확인(VM) |
+| /api/execute 문법 오류 → compile_error + rustc stderr | `m2-01.sh` 6번 | 확인(VM) |
+| compiler 다운 → HTTP 200 internal_error, message 있음, root span ERROR | `m2-01.sh` 6b | 확인(VM) |
+| compile 시간 (예제 `println!`, pod 재시작 직후 첫 요청 = cold / 그 다음 = warm): cold **0.53s** → **1.21s**(두 번 실행), warm **0.06s** | `m2-01.sh` 2번 INFO | 확인(VM). cold는 실행마다 편차가 있음 |
+| 15s timeout·프로세스 그룹 kill·임시 디렉토리 삭제·semaphore(peak 2, 대기)·backend handler(internal_error 3종 포함) | `go test ./cmd/compiler/... ./internal/...` (golang 컨테이너). **timeout은 VM에서 15초를 직접 재현하지 않고 단위 테스트(느린 명령 + 자식 프로세스 주입, timeout 단축)로 대체** | 확인(VM) |
+| 동시 3건 compile 전부 200 (1.76s/1.54s/1.54s), compiler 로그 started 3건, 동시 실행 peak 2 (2+1 직렬화) | `m2-01.sh` 7번 | 확인(VM) |
+| `make verify-m1` 통과 (m1-03 수정·compile span 로그 복구 반영) | `m2-01.sh` 9번 | 확인(VM) |
+| `bash scripts/verify/m2-01.sh` exit 0 (`ALL PASS (m2-01)`, `make verify-m1` 포함) | VM, 로그 `~/lgtm-logs/m2-01-run3.log` | 확인(VM). 3번째 실행에서 통과 (아래 이력) |
+
+### 안 된 것 / 열린 문제
+- **`m2-01.sh` 실패 이력**: 1번째 실행은 `wait`(인자 없음)가 백그라운드 port-forward를 기다려 멈춤 → 대상 PID만 기다리도록 수정. 2번째는 6b 복구 직후 동시 3건 HTTP 000, 3번째 실행은 첫 compile HTTP 000 (두 번째 발생). 이 둘의 원인으로 "svc/ port-forward가 시작 시점 pod 하나에 고정되어 Terminating 중인 옛 pod 또는 새 pod 준비 전에 붙음"을 가정하고 verify를 고침: 새 pod 하나만 Ready로 남을 때까지 대기 → `pod/<이름>`으로 port-forward → 첫 요청 `curl --retry 10 --retry-connrefused`. 고친 뒤 3번째 실행에서 통과. **원인을 pod/endpoint 상태로 직접 증명한 것은 아니다** (수정 후 재현되지 않음). 재발하면 verify의 실패 시 디버그 출력(`get pods -o wide`, pf 로그)을 먼저 본다
+- 서비스(backend → compiler)는 ClusterIP DNS로 호출하며 verify 6~7번에서 통과했다. 위 HTTP 000은 verify 쪽 port-forward 문제로 판단하나, 첫 실패 때 backend → compiler 20초 timeout이 한 번 같이 있었다 (같은 시점, 원인 미확인)
+- 15초 timeout은 VM에서 직접 재현하지 않고 단위 테스트로 대체 (위 표)
+- 413/429, deny-list, 하드닝은 범위 밖 (F-M2-02, F-M2-04)
+- compiler 이미지 1.32GB (slim rust + wasm32-wasip1 target). 크기 최적화는 하지 않음
+
+### 다음 단계
+1. F-M2-02 compiler-hardening (securityContext, `env -i`, NetworkPolicy, read-only rootfs, 7.3 deny-list)
+2. F-M4-01 merge 체크리스트(아래 블록)의 build/deploy 통합은 이 브랜치가 main에 merge된 뒤 진행 (이 브랜치는 이미 origin/main 위로 rebase됨, Makefile 충돌 없음)
+
 ## F-M4-01 frontend-shell (브랜치 feat/m4-01-frontend-shell)
 
 ### 한 일
