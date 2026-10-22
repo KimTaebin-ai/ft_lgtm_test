@@ -22,39 +22,17 @@ CLUSTER_NAME="$(var CLUSTER_NAME)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 k() { kubectl --context "$CTX" "$@"; }
 
-P_MIMIR=18080
-P_TEMPO=13200
+P_MIMIR=22080
+P_TEMPO=17200
 
 # PRD 8.2 bucket 경계 (+Inf 포함)
 WANT_LE='["+Inf", "0.05", "0.1", "0.25", "0.5", "1", "10", "2", "20", "3", "4", "4.5", "5", "5.5"]'
 
-PF_PIDS=()
-pf_stop() {
-	local p
-	for p in "${PF_PIDS[@]:-}"; do
-		[ -n "$p" ] && kill "$p" 2>/dev/null
-	done
-	wait 2>/dev/null
-	PF_PIDS=()
-}
 LOAD_ERR="$(mktemp)"
+. "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
 trap 'pf_stop; rm -f "$LOAD_ERR"' EXIT INT TERM
-
-pf_start() { # <svc> <local>:<remote>  (namespace observability)
-	local svc="$1"; shift
-	k -n observability port-forward "svc/$svc" "$@" >/dev/null 2>&1 &
-	PF_PIDS+=("$!")
-	local m port
-	for m in "$@"; do
-		port="${m%%:*}"
-		for _ in $(seq 1 30); do
-			(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && continue 2
-			sleep 1
-		done
-		return 1
-	done
-	return 0
-}
+# pf_start <svc> <local>:<remote>...  (namespace observability). HTTP 응답까지 확인한 뒤 반환 (lib-pf.sh)
+pf_start() { pf_forward observability "$1" "${@:2}"; }
 
 pyj() { python3 -I -c 'import json,sys
 try:

@@ -25,6 +25,9 @@ PROBE_NS="lgtm-probe"
 HOST="lgtm.local"
 k() { kubectl --context "$CTX" "$@"; }
 TMP="$(mktemp -d)"
+. "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
+PF_LOG_DIR="$TMP"
+P_COMPILER=24082
 
 # 정책을 임시로 지우는 검사(4b)가 중단돼도 항상 복구한다 (idempotent)
 restore_policies() {
@@ -32,7 +35,7 @@ restore_policies() {
 	img="$(k -n "$NS" get deploy compiler -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
 	[ -n "$img" ] && sed "s|__COMPILER_IMAGE__|$img|" k8s/app/compiler.yaml | k apply -f - >/dev/null 2>&1
 }
-cleanup() { restore_policies; k delete ns "$PROBE_NS" --ignore-not-found --wait=false >/dev/null 2>&1; rm -rf "$TMP"; }
+cleanup() { pf_stop; restore_policies; k delete ns "$PROBE_NS" --ignore-not-found --wait=false >/dev/null 2>&1; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 lurl() { curl -s --max-time 60 --resolve "$HOST:80:127.0.0.1" "$@"; }
@@ -146,21 +149,17 @@ v="$(printf '%s' "$body" | pyj "d['status']")"
 ro="$(k -n "$NS" get deploy compiler -o jsonpath='{.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem}/{.spec.template.spec.enableServiceLinks}/{.spec.template.spec.automountServiceAccountToken}')"
 [ "$ro" = "true/false/false" ] && pass "pod 설정 readOnlyRootFilesystem/enableServiceLinks/automountServiceAccountToken = $ro" || fail "pod 설정='${ro}' (기대 true/false/false)"
 CPOD="$(k -n "$NS" get pod -l app=compiler -o jsonpath='{.items[0].metadata.name}')"
-k -n "$NS" port-forward "pod/$CPOD" 18082:8080 >"$TMP/pf.log" 2>&1 &
-PF=$!
-for _ in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/18082) 2>/dev/null && break; sleep 1; done
-printf 'fn main() { println!("hi"); }' | curl -s --max-time 60 -o "$TMP/o.wasm" -X POST -H 'Content-Type: text/plain' --data-binary @- http://127.0.0.1:18082/compile
-kill "$PF" 2>/dev/null
+pf_forward "$NS" "pod/$CPOD" "$P_COMPILER:8080" || fail "port-forward (compiler) 실패"
+printf 'fn main() { println!("hi"); }' | curl -s --max-time 60 -o "$TMP/o.wasm" -X POST -H 'Content-Type: text/plain' --data-binary @- "http://127.0.0.1:$P_COMPILER/compile"
+pf_stop
 magic="$(head -c4 "$TMP/o.wasm" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 [ "$magic" = "0061736d" ] && pass "compile 응답 \\0asm (readOnlyRootFilesystem 상태)" || fail "compile 응답 앞 4바이트='${magic}'"
 
-# ---- 6. 단위 테스트 + 회귀 ----
+# ---- 6. 단위 테스트 (회귀 m2-01, m1-* 는 make verify 가 순서대로 실행한다) ----
 if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local \
 	golang:1.27.3-trixie go test -count=1 ./cmd/compiler/... ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test (deny-list, env 목록 포함) 통과"
 else fail "go test 실패: $(tail -20 "$TMP/gotest.log")"; fi
-if bash scripts/verify/m2-01.sh >"$TMP/m201.log" 2>&1; then pass "m2-01.sh 통과"; else fail "m2-01.sh 실패: $(tail -5 "$TMP/m201.log")"; fi
-if make --no-print-directory verify-m1 >"$TMP/m1.log" 2>&1; then pass "make verify-m1 통과"; else fail "make verify-m1 실패: $(tail -5 "$TMP/m1.log")"; fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS (m2-02)"; exit 0; fi

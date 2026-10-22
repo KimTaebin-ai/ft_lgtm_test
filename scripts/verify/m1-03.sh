@@ -23,36 +23,14 @@ NS="lgtm"
 HOST="lgtm.local"
 k() { kubectl --context "$CTX" "$@"; }
 
-P_LOKI=13100
-P_TEMPO=13200
+P_LOKI=16100
+P_TEMPO=16200
 
-PF_PIDS=()
-pf_stop() {
-	local p
-	for p in "${PF_PIDS[@]:-}"; do
-		[ -n "$p" ] && kill "$p" 2>/dev/null
-	done
-	wait 2>/dev/null
-	PF_PIDS=()
-}
+
+. "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
 trap pf_stop EXIT INT TERM
-
-# pf_start <svc> <local>:<remote>  (namespace observability)
-pf_start() {
-	local svc="$1"; shift
-	k -n observability port-forward "svc/$svc" "$@" >/dev/null 2>&1 &
-	PF_PIDS+=("$!")
-	local m port
-	for m in "$@"; do
-		port="${m%%:*}"
-		for _ in $(seq 1 30); do
-			(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && continue 2
-			sleep 1
-		done
-		return 1
-	done
-	return 0
-}
+# pf_start <svc> <local>:<remote>...  (namespace observability). HTTP 응답까지 확인한 뒤 반환 (lib-pf.sh)
+pf_start() { pf_forward observability "$1" "${@:2}"; }
 
 http_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" 2>/dev/null; }
 # Ingress(Traefik) 경유. /etc/hosts 없이 --resolve 사용
@@ -229,10 +207,7 @@ case "$hz_body" in
 	*) fail "lgtm.local/healthz 본문='${hz_body}' (frontend HTML 아님: backend 노출 의심)" ;;
 esac
 
-# ---- 9. 이전 피처 회귀 ----
-for s in m1-01 m1-02; do
-	sub="$(bash "scripts/verify/$s.sh" 2>&1)" && pass "$s.sh 통과" || fail "$s.sh 실패: $(printf '%s\n' "$sub" | grep '^FAIL' | tr '\n' ' ')"
-done
+# 이전 피처(m1-01, m1-02) 회귀는 make verify 가 순서대로 실행한다 (verify 스크립트는 다른 verify 스크립트를 호출하지 않는다).
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS (m1-03)"; exit 0; fi

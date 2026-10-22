@@ -24,36 +24,21 @@ NS="lgtm"
 HOST="lgtm.local"
 k() { kubectl --context "$CTX" "$@"; }
 
-P_TEMPO=13200
-P_COMPILER=18081
+P_TEMPO=18200
+P_COMPILER=23081
 TMP="$(mktemp -d)"
 
-PF_PIDS=()
-pf_kill() {
-	local p
-	for p in "${PF_PIDS[@]:-}"; do
-		[ -n "$p" ] && kill "$p" 2>/dev/null
-	done
-	wait 2>/dev/null
-	PF_PIDS=()
-}
+. "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
+PF_LOG_DIR="$TMP"
 # 6b 에서 compiler 를 scale 0 으로 내리므로, 중단/실패해도 종료 시 항상 1 로 복구한다 (idempotent)
-cleanup() { pf_kill; k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1; rm -rf "$TMP"; }
+cleanup() { pf_stop; k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 # pf_start <ns> <svc 이름 | pod/이름> <local>:<remote>  (로그: $TMP/pf-<local>.log)
-# svc/ 로 붙으면 시작 시점의 pod 하나에 고정되므로, compiler 는 호출 쪽에서 pod/<이름> 을 넘긴다
-pf_start() {
-	local ns="$1" res="$2" m="$3" port="${3%%:*}"
-	case "$res" in */*) ;; *) res="svc/$res" ;; esac
-	k -n "$ns" port-forward "$res" "$m" >"$TMP/pf-$port.log" 2>&1 &
-	PF_PIDS+=("$!")
-	for _ in $(seq 1 30); do
-		(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0
-		sleep 1
-	done
-	return 1
-}
+# svc/ 로 붙으면 시작 시점의 pod 하나에 고정되므로, compiler 는 호출 쪽에서 pod/<이름> 을 넘긴다.
+# HTTP 응답까지 확인한 뒤 반환한다 (lib-pf.sh)
+pf_start() { pf_forward "$1" "$2" "$3"; }
+pf_kill() { pf_stop; }
 
 # compiler_pod_ready: app=compiler pod 가 Ready 인 새 pod 하나만 남을 때까지(Terminating 포함) 기다리고 이름을 출력한다
 compiler_pod_ready() {
@@ -254,8 +239,7 @@ else
 	fail "go test 실패: $(tail -20 "$TMP/gotest.log")"
 fi
 
-# ---- 9. 회귀: make verify-m1 ----
-if make --no-print-directory verify-m1 >"$TMP/m1.log" 2>&1; then pass "make verify-m1 통과"; else fail "make verify-m1 실패: $(grep -E '^(FAIL|verify-m1 실패)' "$TMP/m1.log" | tr '\n' ' ')"; fi
+# 회귀(verify-m1 등)는 make verify 가 순서대로 실행한다 (verify 스크립트는 다른 verify 스크립트를 호출하지 않는다).
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS (m2-01)"; exit 0; fi

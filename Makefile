@@ -81,18 +81,27 @@ status:
 	@kubectl --context k3d-$(CLUSTER_NAME) get pods -A
 	@kubectl --context k3d-$(CLUSTER_NAME) get ingress -A
 
-verify:
-	@echo "TODO F-M6-02"
+# 전체 검증: 순차 실행, 첫 실패에서 중단. verify 스크립트는 서로를 호출하지 않는다 (port-forward 충돌 방지). VM(Linux)에서만 동작한다
+VERIFY_M1 = m1-01 m1-02 m1-03 m1-04
+VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m4-01 m4-02
 
-# M1 검증: m1-01 ~ m1-04 순차 실행, 첫 실패에서 중단. 실패 시 해당 스크립트의 FAIL 줄을 그대로 다시 출력한다. VM(Linux)에서만 동작한다
+# $(call run_verify,<타겟 이름>,<스크립트 목록>)
+define run_verify
+@for s in $(2); do \
+	echo "==== verify $$s ===="; \
+	out=$$(mktemp); \
+	if bash scripts/verify/$$s.sh >"$$out" 2>&1; then cat "$$out"; rm -f "$$out"; \
+	else cat "$$out"; echo "$(1) 실패: $$s" >&2; grep '^FAIL' "$$out" >&2; rm -f "$$out"; exit 1; fi; \
+done
+@echo "$(1): ALL PASS"
+endef
+
+verify:
+	$(call run_verify,verify,$(VERIFY_ALL))
+
+# M1 검증: m1-01 ~ m1-04 만. 실패 시 해당 스크립트의 FAIL 줄을 다시 출력한다
 verify-m1:
-	@for s in m1-01 m1-02 m1-03 m1-04; do \
-		echo "==== verify $$s ===="; \
-		out=$$(mktemp); \
-		if bash scripts/verify/$$s.sh >"$$out" 2>&1; then cat "$$out"; rm -f "$$out"; \
-		else cat "$$out"; echo "verify-m1 실패: $$s" >&2; grep '^FAIL' "$$out" >&2; rm -f "$$out"; exit 1; fi; \
-	done
-	@echo "verify-m1: ALL PASS"
+	$(call run_verify,verify-m1,$(VERIFY_M1))
 
 ipfs-check:
 	@echo "TODO F-M3-03"
