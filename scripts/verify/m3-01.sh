@@ -22,7 +22,7 @@ CLUSTER_NAME="$(var CLUSTER_NAME)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 NS="ipfs"
 POD="kubo-0"
-PROBE_NS="lgtm-probe"
+PROBE_NS="ipfs-probe"
 HOST="ipfs.lgtm.local"
 k() { kubectl --context "$CTX" "$@"; }
 kx() { k -n "$NS" exec "$POD" -c kubo -- "$@"; }
@@ -107,7 +107,8 @@ case "$code" in 4??) [ "$dt" -le 10 ] && pass "없는 CID → ${code} (${dt}s)" 
 
 # ---- 7. NetworkPolicy: API 5001 은 backend(lgtm, app=backend)에서만 ----
 IMG="$img"
-k create ns "$PROBE_NS" >/dev/null 2>&1 || true
+k delete ns "$PROBE_NS" --ignore-not-found --wait=true >/dev/null 2>&1
+k create ns "$PROBE_NS" >/dev/null 2>&1 || fail "probe namespace 생성 실패"
 mkpod() { # <ns> <name> <labels yaml>
 	cat <<YAML | k -n "$1" apply -f - >/dev/null
 apiVersion: v1
@@ -144,6 +145,7 @@ wait_state() { # <ns> <pod> <port> <ok|blocked> → 최대 40s 폴링
 	done
 	return 1
 }
+k -n "$PROBE_NS" exec probe -- true >/dev/null 2>&1 || { fail "probe pod exec 불가 (이후 차단 판정 무효)"; }
 wait_state "$PROBE_NS" probe 5001 blocked && pass "다른 namespace pod → kubo-api:5001 연결 실패" || fail "다른 namespace pod 가 kubo-api:5001 에 연결됨 (정책 미강제?)"
 wait_state lgtm probe-backend 5001 ok && pass "lgtm/app=backend pod → kubo-api:5001 연결 성공" || fail "lgtm/app=backend pod 가 kubo-api:5001 에 연결 실패"
 # gateway 8080 은 다른 namespace 에서도 허용
@@ -169,10 +171,9 @@ hp="$(k -n "$NS" get pod "$POD" -o jsonpath='{range .spec.containers[*].ports[*]
 case "$hp" in *"4001/TCP"*"4001/UDP"*|*"4001/UDP"*"4001/TCP"*) pass "hostPort 4001 TCP/UDP: $hp" ;; *) fail "hostPort='${hp}'" ;; esac
 ss -lnt 2>/dev/null | grep -q ':4001 ' && pass "VM 호스트 4001/tcp listen" || fail "VM 호스트 4001/tcp listen 안 함"
 ss -lnu 2>/dev/null | grep -q ':4001 ' && pass "VM 호스트 4001/udp listen" || fail "VM 호스트 4001/udp listen 안 함"
-# 노드 컨테이너 안(=hostPort 목적지)에서 4001 이 실제로 열려 있는지: k3d 직접 매핑 → hostPort
-node="k3d-${CLUSTER_NAME:-lgtm}-server-0"
-"$ROOT/scripts/with-docker.sh" docker exec "$node" sh -c 'nc -z -w3 127.0.0.1 4001' >/dev/null 2>&1 \
-	&& pass "k3d 노드 컨테이너 127.0.0.1:4001 연결 성공 (hostPort → kubo)" || fail "k3d 노드에서 127.0.0.1:4001 연결 실패"
+# 호스트 127.0.0.1:4001 (docker-proxy → k3d 노드 → hostPort → kubo): multistream 헤더를 보내고 같은 헤더가 돌아오는지 본다
+hdr="$(timeout 6 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4001; printf "\\023/multistream/1.0.0\\n" >&3; head -c 20 <&3' 2>/dev/null | tr -d '\0-\037')"
+case "$hdr" in */multistream/1.0.0*) pass "호스트 127.0.0.1:4001 → kubo multistream 응답 ($hdr)" ;; *) fail "호스트 4001 에서 multistream 응답 없음: '${hdr}'" ;; esac
 
 # ---- 9. pod 재시작 후 PVC 데이터 유지 ----
 k -n "$NS" delete pod "$POD" --wait=true >/dev/null 2>&1
