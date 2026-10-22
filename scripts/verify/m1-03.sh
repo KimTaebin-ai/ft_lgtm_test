@@ -231,7 +231,7 @@ esac
 
 # ---- 9. 이전 피처 회귀 ----
 for s in m1-01 m1-02; do
-	if bash "scripts/verify/$s.sh" >/dev/null 2>&1; then pass "$s.sh 통과"; else fail "$s.sh 실패"; fi
+	sub="$(bash "scripts/verify/$s.sh" 2>&1)" && pass "$s.sh 통과" || fail "$s.sh 실패: $(printf '%s\n' "$sub" | grep '^FAIL' | tr '\n' ' ')"
 done
 
 echo

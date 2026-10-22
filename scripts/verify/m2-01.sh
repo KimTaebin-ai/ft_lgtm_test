@@ -255,7 +255,7 @@ else
 fi
 
 # ---- 9. 회귀: make verify-m1 ----
-if make --no-print-directory verify-m1 >"$TMP/m1.log" 2>&1; then pass "make verify-m1 통과"; else fail "make verify-m1 실패: $(tail -5 "$TMP/m1.log")"; fi
+if make --no-print-directory verify-m1 >"$TMP/m1.log" 2>&1; then pass "make verify-m1 통과"; else fail "make verify-m1 실패: $(grep -E '^(FAIL|verify-m1 실패)' "$TMP/m1.log" | tr '\n' ' ')"; fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS (m2-01)"; exit 0; fi

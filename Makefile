@@ -84,11 +84,13 @@ status:
 verify:
 	@echo "TODO F-M6-02"
 
-# M1 검증: m1-01 ~ m1-04 순차 실행, 첫 실패에서 중단. VM(Linux)에서만 동작한다
+# M1 검증: m1-01 ~ m1-04 순차 실행, 첫 실패에서 중단. 실패 시 해당 스크립트의 FAIL 줄을 그대로 다시 출력한다. VM(Linux)에서만 동작한다
 verify-m1:
 	@for s in m1-01 m1-02 m1-03 m1-04; do \
 		echo "==== verify $$s ===="; \
-		bash scripts/verify/$$s.sh || { echo "verify-m1 실패: $$s" >&2; exit 1; }; \
+		out=$$(mktemp); \
+		if bash scripts/verify/$$s.sh >"$$out" 2>&1; then cat "$$out"; rm -f "$$out"; \
+		else cat "$$out"; echo "verify-m1 실패: $$s" >&2; grep '^FAIL' "$$out" >&2; rm -f "$$out"; exit 1; fi; \
 	done
 	@echo "verify-m1: ALL PASS"
 
