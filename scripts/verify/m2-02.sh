@@ -93,13 +93,17 @@ v="$(printf '%s' "$body" | pyj "d['status']")"
 # ---- 3. 격리 계층 단독 (deny-list 가 뚫렸다고 가정) ----
 cx() { k -n "$NS" exec deploy/compiler -- "$@"; }
 envs="$(cx env 2>&1)"
-if printf '%s\n' "$envs" | grep -Eiq '_SERVICE_HOST|_SERVICE_PORT|_PORT=tcp://|KUBERNETES|TOKEN|SECRET|PASSWORD'; then
-	fail "compiler 환경변수에 Service 주소/비밀값: $(printf '%s\n' "$envs" | grep -Ei '_SERVICE_|_PORT=tcp|KUBERNETES|TOKEN|SECRET|PASSWORD' | head -3)"
-else pass "compiler 환경변수에 다른 Service 주소·비밀값 없음"; fi
+# KUBERNETES_* 는 enableServiceLinks 와 무관하게 K8s 가 항상 주입하는 default Service 변수라 제외하고, 접근 가능 여부는 아래 API 서버 연결 검사로 본다.
+# rustc 프로세스 환경에는 이 변수들도 없다 (rustcEnv 5개 키 단위 테스트).
+others="$(printf '%s\n' "$envs" | grep -v '^KUBERNETES_' | grep -Ei '_SERVICE_HOST|_SERVICE_PORT|_PORT=tcp://|TOKEN|SECRET|PASSWORD')"
+if [ -n "$others" ]; then
+	fail "compiler 환경변수에 다른 Service 주소/비밀값: $(printf '%s\n' "$others" | head -3)"
+else pass "compiler 환경변수에 (KUBERNETES_* 제외) 다른 Service 주소·비밀값 없음"; fi
+tcp() { cx timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" >/dev/null 2>&1; } # 성공 0
+tcp "$(printf '%s\n' "$envs" | sed -n 's/^KUBERNETES_SERVICE_HOST=//p')" 443 && fail "API 서버(KUBERNETES_SERVICE_HOST:443) 연결 성공" || pass "API 서버 연결 실패 (egress 정책)"
 cx test -e /var/run/secrets/kubernetes.io 2>/dev/null && fail "/var/run/secrets/kubernetes.io 존재" || pass "/var/run/secrets/kubernetes.io 없음"
 cx sh -c 'touch /rootfs-write-test 2>/dev/null' && fail "루트 파일시스템에 쓰기 성공" || pass "루트 파일시스템 쓰기 실패 (readOnlyRootFilesystem)"
 cx sh -c 'f=$(mktemp -p /work) && rm -f "$f"' >/dev/null 2>&1 && pass "/work (emptyDir) 쓰기 성공" || fail "/work 쓰기 실패"
-tcp() { cx timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" >/dev/null 2>&1; } # 성공 0
 tcp 1.1.1.1 80 && fail "외부 1.1.1.1:80 연결 성공" || pass "외부 1.1.1.1:80 연결 실패"
 tcp backend.lgtm.svc.cluster.local 80 && fail "backend Service 연결 성공" || pass "backend Service 연결 실패"
 tcp otel-collector.observability.svc.cluster.local 4317 && pass "otel-collector:4317 연결 성공" || fail "otel-collector:4317 연결 실패"
