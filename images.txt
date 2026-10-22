@@ -1,0 +1,24 @@
+# 외부 이미지 목록 (단일 출처). 형식: <role> <image:tag>   (:latest 금지)
+#   workload : 클러스터에서 실행. docker host 로 pull 후 k3d image import (scripts/import-images.sh)
+#   build    : docker build 의 FROM base. docker host 에만 있으면 된다
+#   infra    : k3d cluster create / k3d image import 가 docker 로 직접 쓰는 이미지 (cluster 생성 전에 pull)
+# manifest/Dockerfile/Makefile 과의 일치는 scripts/check-images.sh 가 검사한다.
+
+workload grafana/mimir:3.2.2
+workload grafana/loki:3.7.9
+workload grafana/tempo:3.1.0
+workload grafana/grafana:13.2.4
+workload otel/opentelemetry-collector-contrib:0.163.1
+workload ipfs/kubo:v0.43.1
+
+build golang:1.27.3-trixie
+build debian:trixie-20261020-slim
+build rust:1.99.1-slim-trixie
+build node:22.23.4-alpine
+build nginxinc/nginx-unprivileged:1.31.7-alpine
+
+# K3S_IMAGE 는 Makefile 값과 같아야 한다 (check-images.sh)
+infra rancher/k3s:v1.37.1-k3s1
+# k3d v5.9.0 바이너리에 박힌 helper 이미지 (strings 로 확인, VM 의 실제 pull 은 검증 단계에서 확인)
+infra ghcr.io/k3d-io/k3d-proxy:5.9.0
+infra ghcr.io/k3d-io/k3d-tools:5.9.0

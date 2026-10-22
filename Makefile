@@ -24,20 +24,30 @@ export CLUSTER_NAME K3D_VERSION K3S_IMAGE KUBECTL_VERSION HELM_VERSION DOCKER_VE
 WITH_DOCKER := scripts/with-docker.sh
 
 .DEFAULT_GOAL := all
-.PHONY: all install cluster build deploy hosts status verify verify-m1 ipfs-check clean fclean re
+.PHONY: all install cluster images build deploy hosts status verify verify-m1 ipfs-check clean fclean re
 
 all: install cluster build deploy hosts
 
 install:
 	@bash scripts/install.sh
 
+# k3s / k3d helper 이미지는 cluster 생성 전에 docker host 로 재시도 pull (scripts/prefetch-images.sh, images.txt)
 cluster:
+	@bash scripts/prefetch-images.sh infra
 	@bash scripts/cluster.sh
 
-# backend + compiler + frontend (frontend 는 Dockerfile build 단계에서 lint + test + build)
+# 외부 이미지 전체 prefetch + workload k3d import (단독 실행용. 클러스터가 없으면 import 는 skip)
+images:
+	@bash scripts/prefetch-images.sh
+	@bash scripts/import-images.sh
+
+# prefetch(외부 이미지, 재시도) → backend + compiler + frontend build/import → workload import
+# (frontend 는 Dockerfile build 단계에서 lint + test + build)
 build:
+	@bash scripts/prefetch-images.sh
 	@BACKEND_IMAGE=$(BACKEND_IMAGE) COMPILER_IMAGE=$(COMPILER_IMAGE) bash scripts/build.sh
 	@FRONTEND_IMAGE=$(FRONTEND_IMAGE) bash scripts/build-frontend.sh
+	@bash scripts/import-images.sh
 
 # observability → ipfs → app 순서 (PRD 9.1). 대기는 readinessProbe + rollout status
 # Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
