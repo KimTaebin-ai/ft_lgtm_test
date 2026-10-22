@@ -22,38 +22,16 @@ NS="observability"
 k() { kubectl --context "$CTX" "$@"; }
 
 # 로컬 포트 (port-forward). 서비스: mimir:8080, loki:3100, tempo:3200 + 4318
-P_MIMIR=18080
-P_LOKI=13100
-P_TEMPO=13200
-P_OTLP=14318
+P_MIMIR=19080
+P_LOKI=14100
+P_TEMPO=14200
+P_OTLP=15318
 
-PF_PIDS=()
-pf_stop() {
-	local p
-	for p in "${PF_PIDS[@]:-}"; do
-		[ -n "$p" ] && kill "$p" 2>/dev/null
-	done
-	wait 2>/dev/null
-	PF_PIDS=()
-}
+
+. "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
 trap pf_stop EXIT INT TERM
-
-# pf_start <svc> <local>:<remote>...  : 백그라운드 port-forward, 모든 로컬 포트가 열릴 때까지 대기
-pf_start() {
-	local svc="$1"; shift
-	k -n "$NS" port-forward "svc/$svc" "$@" >/dev/null 2>&1 &
-	PF_PIDS+=("$!")
-	local m port
-	for m in "$@"; do
-		port="${m%%:*}"
-		for _ in $(seq 1 30); do
-			(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && continue 2
-			sleep 1
-		done
-		return 1
-	done
-	return 0
-}
+# pf_start <svc> <local>:<remote>...  (namespace $NS). HTTP 응답까지 확인한 뒤 반환 (lib-pf.sh)
+pf_start() { pf_forward "$NS" "$1" "${@:2}"; }
 
 http_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" 2>/dev/null; }
 
