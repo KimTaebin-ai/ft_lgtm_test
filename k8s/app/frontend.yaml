@@ -1,4 +1,4 @@
-# F-M4-01 frontend. image 는 make deploy-frontend 가 __FRONTEND_IMAGE__ 를 소스 hash 태그로 치환한다.
+# F-M4-01 frontend. image 는 make deploy 가 __FRONTEND_IMAGE__ 를 소스 hash 태그로 치환한다.
 # nginx-unprivileged(uid 101) + readOnlyRootFilesystem: 실제 기동으로 쓰기 경로는 /tmp 하나뿐임을 확인했다
 # (pid, client/proxy/fastcgi/uwsgi/scgi temp). /var/cache/nginx 는 쓰지 않는다.
 apiVersion: apps/v1
