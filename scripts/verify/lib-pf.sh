@@ -1,5 +1,5 @@
 # verify 스크립트 공용 port-forward 헬퍼. source 해서 쓴다 (직접 실행 대상이 아니다).
-# 전제: 호출 스크립트가 k() 를 정의했다. 정리는 호출 스크립트의 trap 이 pf_stop 을 부른다.
+# 전제: 호출 스크립트가 CTX(kubectl context)를 정의했다. kubectl 은 함수를 거치지 않고 직접 띄운다 (백그라운드 함수의 $! 는 subshell 이라 kill 이 kubectl 까지 닿지 않는다). 정리는 호출 스크립트의 trap 이 pf_stop 을 부른다.
 # 로컬 포트는 스크립트마다 겹치지 않는 값을 쓴다 (m1-01 ~ m2-02 가 각자 +1000*번호 대역).
 
 PF_PIDS=()
@@ -9,7 +9,9 @@ PF_LOG_OWN=0
 pf_stop() {
 	local p
 	for p in "${PF_PIDS[@]:-}"; do
-		[ -n "$p" ] && kill "$p" 2>/dev/null
+		[ -n "$p" ] || continue
+		pkill -P "$p" 2>/dev/null
+		kill "$p" 2>/dev/null
 	done
 	wait "${PF_PIDS[@]:-}" 2>/dev/null
 	PF_PIDS=()
@@ -26,7 +28,7 @@ pf_forward() {
 	case "$res" in */*) ;; *) res="svc/$res" ;; esac
 	if [ -z "$PF_LOG_DIR" ]; then PF_LOG_DIR="$(mktemp -d)"; PF_LOG_OWN=1; fi
 	local log="$PF_LOG_DIR/pf-${1%%:*}.log" pid m port code i
-	k -n "$ns" port-forward "$res" "$@" >"$log" 2>&1 &
+	kubectl --context "$CTX" -n "$ns" port-forward "$res" "$@" >"$log" 2>&1 &
 	pid=$!
 	PF_PIDS+=("$pid")
 	for m in "$@"; do
