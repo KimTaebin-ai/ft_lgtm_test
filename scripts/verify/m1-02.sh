@@ -11,6 +11,8 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
+# 로그 error 검사는 이 스크립트 시작 이후로 한정한다 (앞선 m1-01 이 backend 를 일부러 재시작한 구간의 로그를 제외)
+START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fails=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
@@ -89,10 +91,11 @@ cv="$(k -n "$NS" exec deploy/otel-collector -- /otelcol-contrib validate --confi
 cv_rc=$?
 [ "$cv_rc" -eq 0 ] && pass "otelcol-contrib validate 성공" || fail "otelcol-contrib validate 실패: $cv"
 
-# exporter 전송 실패("Exporting failed")는 제외한다: m1-01 이 mimir/loki/tempo 를 일부러 재시작하고,
-# F-M1-04 부터 backend 가 5초마다 metric 을 보내 재시작 구간의 전송 실패가 error 로 남는다 (기동/설정 오류가 아님)
-errn="$(k -n "$NS" logs deploy/otel-collector 2>&1 | grep -v 'Exporting failed' | grep -cE '"level":"error"|[[:space:]]error[[:space:]]|level=error')"
-[ "${errn:-0}" -eq 0 ] && pass "Collector 기동 로그 error 0건" || fail "Collector 로그 error ${errn}건"
+# 기동/설정 오류는 restartCount==0 으로, 실행 중 error 로그는 이 스크립트 시작 이후 구간만 본다
+rcs="$(k -n "$NS" get pods -l app=otel-collector -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' 2>&1 | grep .)"
+[ -n "$rcs" ] && [ -z "$(printf '%s\n' "$rcs" | grep -vx 0)" ] && pass "Collector restartCount 0" || fail "Collector restartCount=${rcs:-없음}"
+errn="$(k -n "$NS" logs deploy/otel-collector --since-time="$START_TS" 2>&1 | grep -cE '"level":"error"|[[:space:]]error[[:space:]]|level=error')"
+[ "${errn:-0}" -eq 0 ] && pass "Collector 로그 error 0건 (since $START_TS)" || fail "Collector 로그 error ${errn}건 (since $START_TS)"
 
 # ---- 3. Grafana health / anonymous ----
 c=""

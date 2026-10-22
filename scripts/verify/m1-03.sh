@@ -219,19 +219,19 @@ dt="$(python3 -I -c 'import sys; print(float(sys.argv[2])-float(sys.argv[1]))' "
 ok="$(python3 -I -c 'import sys; print(1 if 2.0 <= float(sys.argv[1]) <= 3.5 else 0)' "$dt")"
 [ "$HTTP_CODE" = "200" ] && [ "$ok" = "1" ] && pass "__slow__ 소요 ${dt}s (2~3.5s 허용)" || fail "__slow__ HTTP ${HTTP_CODE} 소요 ${dt}s"
 
-# ---- 8. 회귀: lgtm.local / 은 dummy, /healthz 는 backend 가 아니다 ----
+# ---- 8. 회귀: lgtm.local / 은 frontend(F-M4-01 이후), /healthz 는 backend 가 아니다 (frontend SPA fallback) ----
 root_body="$(lurl "http://$HOST/")"
 [ "$(lurl -o /dev/null -w '%{http_code}' "http://$HOST/")" = "200" ] && pass "lgtm.local / → 200" || fail "lgtm.local / 200 아님"
-case "$root_body" in *lgtm-dummy*) pass "lgtm.local / 본문이 dummy 텍스트" ;; *) fail "lgtm.local / 본문='${root_body}'" ;; esac
+case "$root_body" in *'id="root"'*) pass "lgtm.local / 본문이 frontend HTML" ;; *) fail "lgtm.local / 본문='${root_body}'" ;; esac
 hz_body="$(lurl "http://$HOST/healthz")"
 case "$hz_body" in
-	*lgtm-dummy*) pass "lgtm.local/healthz 본문이 dummy 텍스트 (backend healthz 아님, Ingress 미노출)" ;;
-	*) fail "lgtm.local/healthz 본문='${hz_body}' (dummy 텍스트 아님: backend 노출 의심)" ;;
+	*'id="root"'*) pass "lgtm.local/healthz 본문이 frontend fallback HTML (backend healthz 아님, Ingress 미노출)" ;;
+	*) fail "lgtm.local/healthz 본문='${hz_body}' (frontend HTML 아님: backend 노출 의심)" ;;
 esac
 
 # ---- 9. 이전 피처 회귀 ----
 for s in m1-01 m1-02; do
-	if bash "scripts/verify/$s.sh" >/dev/null 2>&1; then pass "$s.sh 통과"; else fail "$s.sh 실패"; fi
+	sub="$(bash "scripts/verify/$s.sh" 2>&1)" && pass "$s.sh 통과" || fail "$s.sh 실패: $(printf '%s\n' "$sub" | grep '^FAIL' | tr '\n' ' ')"
 done
 
 echo

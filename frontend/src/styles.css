@@ -11,3 +11,13 @@ h1 { font-size: 18px; margin: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .result { height: 30vh; overflow: auto; padding: 8px 16px; background: #111; }
 .result pre { margin: 4px 0 0; font-family: ui-monospace, monospace; white-space: pre-wrap; }
+.actions { display: flex; align-items: center; gap: 12px; }
+.public-note { font-size: 13px; color: #aaa; }
+.result .label { margin-top: 8px; font-size: 12px; color: #888; }
+.result pre.stderr { color: #f0883e; }
+.result pre.stdout { color: #ddd; }
+.notice { margin: 4px 0; }
+.notice.error { color: #f85149; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #9e6a03; color: #fff; font-size: 12px; }
+.meta { margin-top: 8px; font-size: 13px; color: #aaa; }
+.meta a { color: #58a6ff; }

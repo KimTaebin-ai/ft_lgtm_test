@@ -10,6 +10,66 @@
 ### 다음 단계
 -->
 
+## F-M4-02 result-display (브랜치 feat/m4-02-result-display)
+
+### 한 일
+- `frontend/src/api.ts`: `execute()` 가 throw 대신 `ExecuteOutcome` 반환 (`ok` / `too_large`(413) / `busy`(429) / `http_error`(그 외 비정상, 400 포함) / `bad_body`(비JSON·비객체·status 없음) / `network`)
+- `frontend/src/ResultView.tsx`(신규): success(stdout/stderr 구분, `Output truncated (10kB)` 배지) / compile_error(rustc 메시지 `<pre>`) / runtime_error / timeout(`Time limit exceeded (5s)`) / memory_limit(`Memory limit exceeded (10MB)`) / internal_error(`서버 내부 오류, 잠시 후 다시 시도` + message) / 알 수 없는 status 는 원문. `timings_ms` 표시. 출력은 JSX 텍스트 노드만 (`dangerouslySetInnerHTML` 없음)
+- IPFS 링크 2개(`http://ipfs.lgtm.local/ipfs/<cid>`, `https://ipfs.io/ipfs/<cid>`, 새 탭, `noopener noreferrer`): cid 를 `^[A-Za-z0-9]{10,100}$` 로 검증한 뒤 직접 조립. 응답의 `ipfs_url` 은 href 에 쓰지 않고 null/빈 값(=생성 실패) 판정에만 사용. null → `공유 링크 생성 실패(IPFS timeout)`, cid 검증 실패 → 링크 없이 안내
+- trace_id 표시 + 복사 버튼. `http://lgtm.local` 은 보안 컨텍스트가 아니라 `navigator.clipboard` 가 없으므로 fallback(텍스트 자동 선택 + `선택됨 — Ctrl+C로 복사`)이 정상 경로다. clipboard 거부 시에도 같은 fallback. Grafana 링크는 만들지 않음 (저장소에 Tempo datasource uid/Explore URL 형식 근거 없음)
+- `App.tsx`: Run 옆 안내 `실행한 코드와 결과는 IPFS에 영구 공개됩니다`
+- 테스트: vitest 5.0.5 + jsdom + @testing-library (`ResultView.test.tsx`, `api.test.ts`, `App.test.tsx`, 39건). 실패 상태로 먼저 커밋(`cdf40ab`) 후 구현
+- `frontend/Dockerfile` build 단계: `npm run lint && npm test && npm run build` (이미지 빌드가 테스트 통과를 포함)
+- make 통합: `build` 에 `build-frontend.sh`, `deploy` 에 frontend.yaml apply + rollout + `wait-ingress lgtm.local`. `deploy-frontend` 타겟과 `k8s/dummy/lgtm.yaml` 제거. `dummy-lgtm` 은 `delete --ignore-not-found` 로 정리 유지
+- `scripts/verify/m4-02.sh` 신규 (frontend pod/restart, dummy-lgtm 없음, `/` 앱 HTML, `/api` 회귀, 번들 CDN 0건, src 에 dangerouslySetInnerHTML 없음, 번들에 공개 안내 문구)
+- verify 수정(범위 확장, 필요해서 함): `m1-03.sh` 8번(`/`·`/healthz` 가 dummy 텍스트가 아니라 frontend HTML 인지), `m1-03.sh` 9번(하위 스크립트 FAIL 줄 노출), `m1-02.sh`, `m2-01.sh`, Makefile `verify-m1` (아래)
+
+### PRD 변경 (확정)
+- **FE-07**: `ipfs.lgtm.local` 링크 + `https://ipfs.io/ipfs/<cid>` 두 개. 이유: subject "share with the world"
+- **status `internal_error` 추가** (F-M2-01 확정 사항, 화면 처리 추가). 플랫폼 장애
+- FE-08 문구: PRD "실행한 코드는 IPFS에 영구 공개됩니다" → "실행한 코드와 결과는 IPFS에 영구 공개됩니다" (사용자 지시)
+
+### m1-02 간헐 실패 대응 (사용자 지시로 이번에 처리)
+- `m1-02.sh`: Collector 로그 error 검사를 스크립트 시작 시각 이후(`kubectl logs --since-time`)로 한정, 기동 오류는 `restartCount==0` 으로 확인. `Exporting failed` 제외 예외 제거
+- `make verify-m1`: 실패 시 해당 스크립트의 `FAIL` 줄을 그대로 다시 출력. `m2-01.sh` 의 verify-m1 실패 메시지와 `m1-03.sh` 9번도 `tail -5` 대신 FAIL 줄을 담음
+- 이 변경으로 첫 FAIL 줄이 처음 보이게 됨 (아래 "안 된 것")
+
+### 된 것 (검증표)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| vitest 39건 통과, `npm run lint`, `npm run build` | Mac `frontend/` 에서 실행 | 확인(mac) |
+| 테스트가 구현 전에 실패 | 구현 전 `npx vitest run` (3 파일 실패, 11건 실패 출력 확인) 후 `cdf40ab` 커밋 | 확인(mac) |
+| `make clean && make` exit 0, 재실행 `make` exit 0 (frontend 이미지 빌드 + Dockerfile 안 `npm test` 포함) | VM, 로그 `~/lgtm-logs/m4-02-full-run.log` (`MAKE1_OK`/`MAKE2_OK`) | 확인(VM). 커밋 62598cf 기준 |
+| `m4-01.sh` ALL PASS (이미지 `docker build --target build` = lint+test+build 포함) | 위 체인 | 확인(VM) |
+| `m4-02.sh` ALL PASS (frontend pod Ready/restart 0, dummy-lgtm 없음, `/` 앱 HTML, `/api` 회귀, 번들 CDN 0건, src 에 dangerouslySetInnerHTML 없음, 공개 안내 문구 번들 포함) | 위 체인 | 확인(VM). 새로 만든 클러스터 기준 |
+| `m1-03.sh` + `m2-01.sh` 통과 (m1-03 8번 수정 후, verify-m1 포함) | VM, `m4-02-run2.log` `CHAIN2_OK` | 확인(VM). **커밋 2c1bc12 기준, m1-02 변경(62598cf) 이전 스크립트** |
+| 새 `m1-02.sh` + `make verify-m1` 단독 실행 통과 (Collector restartCount 0, since-time error 0건, `Exporting failed` 예외 없이) | VM 단독 `make verify-m1` → `verify-m1: ALL PASS` | 확인(VM). 1회 |
+| 브라우저에서 Run → 결과 화면 | 미실시 | **미확인** (수동 체크리스트) |
+| 413 화면 | api/ResultView mock 테스트만 | **backend 에 413 이 아직 없음** (F-M2-04). 실서버 미확인 |
+| S3 (runtime error / 제한 초과) 화면 | mock 테스트만 | **F-M2-03 전이라 실서버 미확인** |
+| 기존 클러스터에서 `dummy-lgtm` 이 `delete --ignore-not-found` 로 정리됨 | — | **미확인** (VM 을 `make clean` 으로 새로 올렸기 때문에 이 경로를 타지 않음) |
+
+### 안 된 것 / 열린 문제
+- **m2-01 안에서 호출되는 `make verify-m1` 의 m1-02 간헐 실패 (미해결, 원인 미확인)**. 새 m1-02 스크립트로 전체 체인(`m4-02-full-run.log`)을 돌렸을 때 `m2-01.sh` 9번이 실패했고 체인이 거기서 멈춤(최종 `make verify-m1` 단계는 실행되지 않음). 첫 FAIL 줄: `FAIL: Collector /v1/traces code=000` (이어서 `/v1/logs`, `/v1/metrics` 도 000, 그 뒤 Tempo 404 / Loki·Mimir 0건은 그 결과). 같은 m1-02 에서 앞 단계(restartCount 0, error 로그 0건, Grafana, datasource 3개)는 통과 → 6번 OTLP `port-forward` 호출만 연결 실패. 이번에 추가한 로그 검사 변경과는 무관한 지점
+  - 이력: 전체 체인 첫 실행에서도 m2-01 의 verify-m1 이 m1-02 에서 실패(당시 FAIL 줄이 안 남아 같은 실패인지는 **확인 못 함**). 이후 m2-01 단독 재실행에서는 m1-03 8번(dummy 가정, 수정함)이 원인이었고, 수정 후 m1-03+m2-01 은 통과, `make verify-m1` 단독도 통과. 즉 m1-02 실패는 `m2-01.sh` 안에서 호출될 때만 2회 관측
+  - 추정(증명 안 됨): `pf_start` 는 로컬 포트가 열렸는지만 보고(kubectl 이 listen 하면 통과) upstream 연결을 확인하지 않는다. m2-01 의 선행 단계(compiler 중단·복구, 동시 3건, 도커 go test) 직후라 Collector 쪽 연결이 아직 안정되기 전일 수 있다. 다음 실패 때는 `pf_start` 의 kubectl 출력(현재 `/dev/null`)을 먼저 본다
+  - 같은 실패 2번이라 이 브랜치에서는 더 고치지 않고 멈춤
+- `m4-02.sh` 에는 413 검사가 없다 (backend 413 미구현)
+- Grafana 링크 미구현 (위 사유)
+- 번들 크기는 F-M4-01 과 동일하게 2.9MB 대(monaco). 범위 밖
+- `npm audit`: F-M4-01 에 적은 monaco-editor/dompurify low 외에 vitest/jsdom 추가분은 확인하지 않음
+
+### 수동 확인 체크리스트 (VM Firefox, `http://lgtm.local`)
+- [ ] **S1 정상 실행**: 예제 그대로 Run → status 정상 표시, stdout, `compile/execute/ipfs_upload` timings, IPFS 링크 2개(`ipfs.lgtm.local`, `ipfs.io`)가 새 탭으로 열림(ipfs.io 는 오프라인이면 열리지 않아도 href 가 `https://ipfs.io/ipfs/<cid>` 인지만 확인), Run 근처 공개 안내, trace_id 복사 버튼 → "선택됨 — Ctrl+C로 복사" 와 텍스트 선택
+- [ ] **S2 문법 오류**: `let x = ;` 로 Run → compile_error, rustc 메시지가 monospace 로 그대로 표시, IPFS 링크 2개
+- [ ] S3 (runtime error / 제한 초과)는 **F-M2-03 전이라 mock 테스트로만 확인**됐다. F-M2-03 에서 실제 화면 확인 필요
+- [ ] 네트워크 탭의 요청 도메인이 `lgtm.local` 하나인지 (ipfs 링크 클릭 제외)
+
+### 다음 단계
+1. m2-01 안 verify-m1 의 m1-02 간헐 실패 원인 확인 (`pf_start` upstream 확인 / kubectl 출력 보존). 위 추정은 증명 전
+2. F-M2-03 (execute) 이후 S3 화면을 실서버로 확인
+3. F-M2-04 의 413 이 들어오면 `m4-02.sh` 에 413 검사 추가
+
 ## F-M2-01 compiler-service (브랜치 feat/m2-01-compiler-service)
 
 ### 한 일

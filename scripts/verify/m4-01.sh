@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # F-M4-01 frontend-shell 검증. Debian VM(Linux)에서만 실행한다.
-# 전제: make deploy-frontend 가 끝난 상태 (cluster + backend 는 이미 떠 있음). make deploy/clean 은 호출하지 않는다.
+# 전제: make (build + deploy) 가 끝난 상태. make deploy/clean 은 호출하지 않는다.
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then

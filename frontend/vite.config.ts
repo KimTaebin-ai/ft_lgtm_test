@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 // 개발 모드: /api 를 VM 의 Ingress 로 프록시한다. VM IP 는 LGTM_VM_URL 로 바꾼다.
@@ -7,6 +7,11 @@ const vm = process.env.LGTM_VM_URL ?? 'http://192.168.64.8'
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test-setup.ts'],
+  },
   server: {
     proxy: {
       '/api': { target: vm, headers: { Host: 'lgtm.local' } },
