@@ -32,11 +32,18 @@
 | `npm run lint`(eslint + tsc), `npm run build` 통과 | Mac `frontend/` 에서 실행 | 확인(mac) |
 | dist 에 CDN 도메인(jsdelivr/unpkg/cdnjs/googleapis/gstatic) 0건. http(s) 호스트는 w3.org, github.com, react.dev, code.visualstudio.com, microsoft.com (주석·xmlns 문자열) | `grep -rEoh 'https?://...' dist` | 확인(mac) |
 | 이미지 빌드(lint+build 포함) 성공, `--read-only --tmpfs /tmp --user 101 --cap-drop ALL` 에서 `/` 200, `id="root"` 포함, `/deep/link` SPA fallback 200 | Mac Docker 로컬 실행 | 확인(mac). VM 아님 |
-| frontend pod Ready / limit, lgtm.local / 이 앱 HTML, /api 회귀 없음, `m4-01.sh` exit 0 | VM | **미확인** (아래) |
+| frontend pod Ready(1/1, restart 0), limit 100m/64Mi, 태그 `lgtm-frontend:src-81848450da36`, IfNotPresent | `make deploy-frontend` 후 `m4-01.sh` | 확인(VM) |
+| `lgtm.local /` 200 + `id="root"`, dummy 텍스트 아님 | `m4-01.sh` | 확인(VM) |
+| 이미지 안 정적 파일(6개)에 CDN 도메인 0건, index.html 외부 src/href 없음 | `m4-01.sh` | 확인(VM) |
+| `/api/execute` GET 405, POST backend JSON (Ingress 회귀 없음) | `m4-01.sh` | 확인(VM) |
+| `docker build --target build` (npm ci + lint + build) | `m4-01.sh` | 확인(VM) |
+| `bash scripts/verify/m4-01.sh` exit 0 (ALL PASS) | VM 실행 | 확인(VM) |
+| k8s 에서 readOnlyRootFilesystem + emptyDir(/tmp) 기동, nginx 로그에 emerg/error 없음 (ipv6 정보성 한 줄만) | VM `kubectl logs` | 확인(VM) |
+| Mac `npm run dev`(포트 5199) 의 `/api/execute` POST → VM backend stub 응답(`stub output`) 프록시 | curl localhost:5199 | 확인(mac). 브라우저에서 Run 클릭은 미실시 |
 
 ### 안 된 것
-- **VM(192.168.64.8)이 응답하지 않아(ssh/ping timeout) VM 검증을 전혀 못 했다.** `m4-01.sh` 를 먼저 커밋했지만 "VM 에서 실패" 도 확인하지 못했다 (Linux 가 아니면 즉시 exit 1 이므로 Mac 에서는 항상 실패). k8s 안에서 readOnlyRootFilesystem + emptyDir(/tmp) 기동, Ingress 라우팅, make deploy-frontend 도 미확인
-- Mac `npm run dev` → VM stub 응답도 VM 이 없어 미확인
+- `m4-01.sh` 를 구현 전에 커밋했으나 당시 VM 이 꺼져 있어 "VM 에서 실패" 는 확인하지 못했다 (이후 구현 + 배포 뒤 통과만 확인)
+- 브라우저(VM Firefox)에서 Run → 결과 표시와 네트워크 탭 외부 요청 0개는 **미확인** (아래 수동 절차)
 - `npm audit`: monaco-editor 0.57.0 → dompurify(≤3.4.15) low 2건 (IN_PLACE 사용 경로, 우리 코드는 해당 API 미사용). 0.56.0 으로 내리면 해소된다고 나오지만 breaking 이라 그대로 둠
 - 번들 index js 2.9MB (monaco 전체 editor.api). 코드 분할은 범위 밖
 
