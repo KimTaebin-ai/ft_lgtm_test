@@ -2,6 +2,7 @@ package execute
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,9 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -19,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"lgtm/backend/internal/telemetry"
+	"lgtm/backend/internal/wasmexec"
 )
 
 func init() {
@@ -72,7 +74,23 @@ func newServerWithMetrics(t *testing.T) (*httptest.Server, *tracetest.SpanRecord
 	return newServerFor(t, newFakeCompiler(t, nil).srv.URL)
 }
 
+// fakeExec는 wasmexec 대신 고정된 결과를 돌려준다 (실제 실행은 wasmexec 패키지 테스트와 m2-03.sh 가 검증).
+type fakeExec struct {
+	res wasmexec.Result
+	err error
+}
+
+func (f *fakeExec) Run([]byte) (wasmexec.Result, error) { return f.res, f.err }
+
+func okExec() *fakeExec {
+	return &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusSuccess, Stdout: "stub output\n"}}
+}
+
 func newServerFor(t *testing.T, compilerURL string) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
+	return newServerWithExec(t, compilerURL, okExec())
+}
+
+func newServerWithExec(t *testing.T, compilerURL string, ex Executor) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
 	t.Helper()
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
@@ -81,7 +99,7 @@ func newServerFor(t *testing.T, compilerURL string) (*httptest.Server, *tracetes
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL))
+	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL, ex))
 	t.Cleanup(srv.Close)
 	return srv, rec, reader
 }
@@ -254,15 +272,6 @@ func TestInternalError(t *testing.T) {
 	}
 }
 
-func TestSlow(t *testing.T) {
-	srv, _ := newServer(t)
-	t0 := time.Now()
-	post(t, srv.URL, codeBody(`fn main() { /* __slow__ */ }`))
-	if d := time.Since(t0); d < 2*time.Second || d > 3500*time.Millisecond {
-		t.Errorf("소요 %v", d)
-	}
-}
-
 func TestInvalid(t *testing.T) {
 	srv, _ := newServer(t)
 	for _, body := range []string{`{`, `{"language":"go","code":"x"}`, `{"language":"rust","code":" "}`} {
@@ -374,5 +383,67 @@ func TestInvalidRequestRecordsNoMetric(t *testing.T) {
 	post(t, srv.URL, `{"language":"go","code":"x"}`)
 	if ms := collect(t, reader); len(ms) != 0 {
 		t.Errorf("400 요청은 metric을 기록하지 않아야 함: %v", ms)
+	}
+}
+
+// execute 단계 status 매핑, 응답 필드, TR-04 attribute, 실패 시 execute/root span ERROR.
+func TestExecuteStatusMappingAndSpanAttributes(t *testing.T) {
+	cases := []struct {
+		name    string
+		ex      *fakeExec
+		status  string
+		message string
+		isErr   bool
+		attrs   map[string]any
+	}{
+		{"success", &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusSuccess, Stdout: "o", Stderr: "e", Truncated: true}},
+			"success", "", false, map[string]any{"exec.exit_code": int64(0), "exec.timed_out": false, "exec.output_truncated": true, "exec.memory_limited": false}},
+		{"runtime_error", &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusRuntimeError, Message: "exit status 3", ExitCode: 3}},
+			"runtime_error", "exit status 3", true, map[string]any{"exec.exit_code": int64(3), "exec.timed_out": false, "exec.output_truncated": false, "exec.memory_limited": false}},
+		{"timeout", &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusTimeout, Message: "time limit exceeded (5s)", ExitCode: -1}},
+			"timeout", "time limit exceeded (5s)", true, map[string]any{"exec.exit_code": int64(-1), "exec.timed_out": true, "exec.output_truncated": false, "exec.memory_limited": false}},
+		{"memory_limit", &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusMemoryLimit, Message: "memory limit exceeded", ExitCode: -1}},
+			"memory_limit", "memory limit exceeded", true, map[string]any{"exec.exit_code": int64(-1), "exec.timed_out": false, "exec.output_truncated": false, "exec.memory_limited": true}},
+		{"internal", &fakeExec{err: errors.New("engine 오류")},
+			"internal_error", "internal error: engine 오류", true, map[string]any{"exec.exit_code": int64(-1), "exec.timed_out": false, "exec.output_truncated": false, "exec.memory_limited": false}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, rec, _ := newServerWithExec(t, newFakeCompiler(t, nil).srv.URL, c.ex)
+			_, m := post(t, srv.URL, codeBody(`fn main() {}`))
+			if m["status"] != c.status {
+				t.Fatalf("status=%v 기대 %s (%v)", m["status"], c.status, m)
+			}
+			if got, _ := m["message"].(string); got != c.message {
+				t.Errorf("message=%q 기대 %q", got, c.message)
+			}
+			if c.ex.res.Stdout != "" && (m["stdout"] != c.ex.res.Stdout || m["stderr"] != c.ex.res.Stderr || m["truncated"] != c.ex.res.Truncated) {
+				t.Errorf("stdout/stderr/truncated 가 응답에 반영되지 않음: %v", m)
+			}
+			var exec, root sdktrace.ReadOnlySpan
+			for _, s := range rec.Ended() {
+				switch {
+				case s.Name() == "execute":
+					exec = s
+				case !s.Parent().IsValid():
+					root = s
+				}
+			}
+			if exec == nil || root == nil {
+				t.Fatal("execute/root span 없음")
+			}
+			got := map[string]any{}
+			for _, a := range exec.Attributes() {
+				got[string(a.Key)] = a.Value.AsInterface()
+			}
+			for k, v := range c.attrs {
+				if got[k] != v {
+					t.Errorf("%s=%v (%T) 기대 %v", k, got[k], got[k], v)
+				}
+			}
+			if (exec.Status().Code == codes.Error) != c.isErr || (root.Status().Code == codes.Error) != c.isErr {
+				t.Errorf("ERROR 표시: execute=%v root=%v 기대 %v", exec.Status().Code, root.Status().Code, c.isErr)
+			}
+		})
 	}
 }

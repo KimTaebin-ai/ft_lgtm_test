@@ -14,6 +14,7 @@ import (
 
 	"lgtm/backend/internal/execute"
 	"lgtm/backend/internal/telemetry"
+	"lgtm/backend/internal/wasmexec"
 )
 
 // defaultCompilerURL은 같은 namespace(lgtm)의 compiler Service다. COMPILER_URL로 바꿀 수 있다.
@@ -47,7 +48,12 @@ func run() error {
 	if compilerURL == "" {
 		compilerURL = defaultCompilerURL
 	}
-	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics, compilerURL))
+	runner, err := wasmexec.New()
+	if err != nil {
+		return fmt.Errorf("wasmexec: %w", err)
+	}
+	defer runner.Close()
+	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics, compilerURL, runner))
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

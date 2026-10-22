@@ -39,8 +39,9 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 200m, memory: 128Mi}
+            # F-M2-03: wasmtime Engine + module compile(≈2MB wasm) + guest 10MiB. 잠정값, VM 실측으로 확정 (HANDOFF F-M2-03)
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 1, memory: 256Mi}
 ---
 apiVersion: v1
 kind: Service
