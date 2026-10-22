@@ -25,6 +25,7 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). VM 검증: rsync -a --delete --exclude .git ./ lgtm-vm:~/lgtm/ 후 ssh 실행. macOS 실행 결과는 검증으로 치지 않는다
 - 버전·기본값·API는 WebFetch나 실제 명령 출력으로 확인한 값만 쓴다
 - pod가 CrashLoop이면 먼저 logs --previous | grep level=error로 첫 에러를 찾는다. 같은 수정으로 2번 실패하면 멈추고 첫 에러 줄을 보고한다
+- 원인 불명 간헐 실패는 정보 수집 1회 후 HANDOFF에 기록하고 진행. 재현 시도를 반복하지 않는다
 
 ## 금지
 
@@ -37,3 +38,6 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - Makefile 타겟은 idempotent, 재로그인 없이 새 VM에서 동작해야 함
 - 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). 스크립트는 bash + GNU 도구 기준
 - VM 검증: rsync -a --delete --exclude .git --exclude node_modules ./ lgtm-vm:~/lgtm/ 후 ssh lgtm-vm 'cd ~/lgtm && ...'. macOS 실행 결과는 검증으로 치지 않는다
+- 개발 반복 중 make clean 금지. make 또는 make build deploy로 갱신. make clean && make와 make verify 전체는 PR 직전 1회
+- 반복 중 검증은 이번 피처의 verify 스크립트만
+- 원인 불명 간헐 실패는 정보 수집 1회 후 HANDOFF에 기록하고 진행. 재현 시도를 반복하지 않는다
