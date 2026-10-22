@@ -10,6 +10,66 @@
 ### 다음 단계
 -->
 
+## F-M2-03 wasmtime-exec (브랜치 feat/m2-03-wasmtime-exec)
+
+### 한 일
+- `backend/internal/wasmexec`(신규): wasmtime-go **v50.0.0**(`github.com/bytecodealliance/wasmtime-go/v50`, 태그 v50.0.0 에 `build/linux-aarch64/libwasmtime.a` 60MB, `build/linux-x86_64/libwasmtime.a` 69MB 둘 다 있음. `gh api` 로 확인, main 에는 없고 태그에만 있음)
+  - Engine/Linker 공유 + **전역 ticker 100ms 가 `IncrementEpoch`**, Store 마다 `SetEpochDeadline(51)` (요청별 타이머로 올리면 동시 실행 중인 다른 요청이 끊김. 51 인 이유: ticker 위상 때문에 50 이면 4.9초에 끊길 수 있음). 실측 loop {} execute 5.077s
+  - `Store.Limiter(10MiB)`, WASI: preopen 없음·환경변수 없음·argv `["main"]`·stdin 설정 없음·socket 없음
+  - **출력 캡처**: wasmtime-go v50 `WasiConfig` 는 `SetStdoutFile/SetStderrFile(path)` 와 Inherit 뿐 (pipe/writer 없음, `wasi.go` 소스 확인) → 파일 방식은 5초 동안 디스크에 무제한 쓸 수 있음. 그래서 `Linker.AllowShadowing(true)`(`linker.go:50-55`) 후 `DefineWasi()` 뒤에 `wasi_snapshot_preview1.fd_write` 만 Go 함수로 재정의. fd 1/2 → 요청별 stdout·stderr 버퍼 2개(합계 10240바이트, 초과분 버림 + truncated), 그 외 fd 는 EBADF(8), `nwritten` 은 요청 전체(프로그램은 정상 진행). 디스크에 쓰는 코드 경로 없음
+  - 분류: `proc_exit` 0 → success / 그 외 → runtime_error(exit_code) / trap Interrupt → timeout / 그 외 trap → runtime_error / **memory_limit = (a) instantiate 실패(초기 메모리 > 10MiB) 또는 (b) `unreachable` trap + stderr 마지막 512바이트에 `memory allocation of … bytes failed`**. (b) 는 10kB 제한과 별개인 분류 전용 tail 이라 출력이 먼저 꽉 찬 뒤 OOM 이어도 동작하고 응답에는 포함하지 않음
+- `internal/execute/handler.go`: stub 을 `Executor` 인터페이스(운영: `*wasmexec.Runner`)로 교체. execute span 에 `exec.exit_code`(종료 코드 없으면 -1) / `exec.timed_out` / `exec.output_truncated` / `exec.memory_limited` (성공·실패 모두). success 가 아니면 execute span 과 root span ERROR, 플랫폼 오류는 `internal_error`. `__slow__` 트리거와 stub 의 execute sleep 제거 (ipfs.upload stub sleep 은 유지)
+- `backend/Dockerfile`: `CGO_ENABLED=1` (golang:1.27.3-trixie 에 gcc 있음), 런타임은 debian trixie 그대로
+- `k8s/app/backend.yaml`: resources request 100m/128Mi, limit 1 CPU/512Mi (아래 실측)
+- `__slow__` 대체(범위 11): `scripts/load.sh`, `m1-03.sh` 7번, `m1-04.sh` 라벨. 실제 2.2초 busy loop Rust (`Instant::now()` 후 `elapsed < 2200ms`). 처음 1.5초로 했다가 compile 이 약 0.25초라 전체 1.82초(<2s)가 되어 `make verify` 가 m1-03 에서 실패 → 2.2초로 수정
+- `scripts/verify/m2-03.sh`(먼저 실패 상태로 커밋 806d7cf), `make verify` 에 m2-03 추가 (m2-02 뒤, m3-01 앞). 504 진단 출력 추가(아래)
+
+### 된 것 (검증표, 모두 VM `lgtm-vm` aarch64, 로그 `~/lgtm-logs/m2-03-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| arm64 에서 cgo 빌드·링크·실행 | `make build deploy` `m2-03-build1.log` `BUILD_DEPLOY_EXIT=0` | 확인(VM) |
+| `make clean && make` exit 0, 재실행 exit 0 | `m2-03-final.log` `MAKE1_EXIT=0`, `MAKE2_EXIT=0` (이번에는 Docker Hub pull timeout 없음) | 확인(VM) |
+| `make verify` exit 0 (m1-01 … m2-03, m3-01, m4-01, m4-02) | `m2-03-verify2.log` `VERIFY_EXIT=0`, 마지막 줄 `verify: ALL PASS` | 확인(VM). 아래 "실행 순서" 참고 |
+| m2-03.sh ALL PASS (51 PASS) | run2, run3, run4, 롤아웃 직후 fresh1·fresh2 | 확인(VM) |
+| loop {} → timeout, execute 5.077s, 전체 5.34s | m2-03 1번 | 확인(VM) |
+| `vec![0u8;100_000_000]` → memory_limit / fs 읽기 → runtime_error, 응답에 `root:x:0:0` 없음 / TcpStream → 실패 | m2-03 2~4번 | 확인(VM) |
+| 1MB 출력 → truncated, stdout+stderr ≤ 10240 / `loop{println}` → timeout + truncated + 10240 이하 | m2-03 5~6번 | 확인(VM) |
+| 위 실행 동안 backend 재시작 0, OOMKilled 아님, cgroup `memory.peak` < `memory.max`, `/tmp`·`/var/tmp` 비어 있음, `readOnlyRootFilesystem=true` + volume 없음 | m2-03 6번 | 확인(VM) |
+| env 0개, args 1개 / 정상 예제(frontend `EXAMPLE_CODE`) 출력 `total area = 19.85` / stdout·stderr 분리 / `exit(3)` → runtime_error / panic → runtime_error | m2-03 7~9번 | 확인(VM) |
+| 10kB 출력 후 OOM → memory_limit + truncated, 분류 tail 은 응답에 없음 / 초기 메모리 20MB 모듈 → memory_limit | m2-03 10~11번 | 확인(VM) |
+| **동시성**: loop {} 실행 중 hello 2건 success(execute 47ms), loop 만 timeout, hello 가 loop 종료 전에 끝남 | m2-03 12번 | 확인(VM) |
+| Tempo: TR-04 attribute 4종, 실패 케이스(exit3, loop, loopp, mem) execute·root span ERROR, 성공(hello, big) ERROR 아님 | m2-03 13번 | 확인(VM) |
+| 단위 테스트 (wasmexec: WAT 기반 17종 + 동시성/timeout, execute: status 매핑·attribute·ERROR) | VM golang 컨테이너 `go test ./internal/...` (m2-03.sh 14번) | 확인(VM) |
+
+### backend 메모리 실측 (VM, 요청마다 9MB 를 쥐고 5초 spin 하는 코드를 동시 N건, backend 재시작 후 cgroup `memory.peak`, `m2-03-memprobe.log`)
+| N | idle | peak |
+|---|---|---|
+| 0 | 11MB | 21MB |
+| 1 | 9MB | 27MB |
+| 4 | 11MB | 70MB |
+| 8 | 12MB | 122MB |
+| 16 | 9MB | 232MB |
+
+동시 요청당 약 +14MB (guest 9~10MB + 나머지). 기존 limit 128Mi 로는 N=16 에서 OOMKilled 위험 → **limit 512Mi (N=16 실측의 2배 이상), request 128Mi**. 동시성 상한이 아직 없으므로 상한은 F-M2-04 에서 정할 것 (N=8 이면 약 122MB).
+
+### 실행 순서 (정직하게)
+- `make clean && make` → 재실행 → `make verify` 한 번에 돌린 `m2-03-final.log` 는 **m1-03 에서 실패**(느린 요청 1.82s, 위 설명). 그 뒤 스크립트만(load.sh, m1-03.sh) 고치고 같은 클러스터에서 `make verify` 를 다시 돌려 통과했다 (`m2-03-verify2.log`). 즉 "클린 클러스터에서 한 번에 verify 통과" 는 아니다. 고친 파일은 verify 스크립트뿐이고 backend 이미지는 `make clean` 이후 바뀌지 않았다
+- 첫 `m2-03.sh` 실행에서 스크립트 버그 1건(`ls /tmp /var/tmp` 가 빈 디렉토리에도 헤더 출력) → `find` 로 수정
+
+### 안 된 것 / 열린 문제
+- **Gateway Timeout (원인 미확인)**: 코드 변경 후 `make build deploy` 직후 바로 돌린 m2-03.sh(`m2-03-build2.log`)에서 **첫 `loop {}` 요청이 HTTP 응답 본문 `Gateway Timeout` 으로 실패**했고 같은 실행에서 backend Ready 검사도 실패(종료 중인 이전 pod 가 같이 잡힘). 배포 직후 첫 요청은 평가자가 처음 Run 을 누르는 상황과 같다. 그 응답이 Traefik 의 텍스트인지 backend 응답인지, 헤더·소요 시간·Traefik 로그는 **수집하지 못했다**. 이후 **재현 안 됨**: run3, run4, `kubectl rollout restart deploy/backend` 직후 곧바로 m2-03.sh 2회(fresh1, fresh2) 모두 PASS 51개, DIAG 출력 0건. 워밍업으로 덮지 않았다
+  - 다음 정보 수집을 위해 `m2-03.sh` 의 `run()` 이 HTTP != 200 이거나 JSON status 가 없으면 `diag_http` 로 응답 본문 앞 300바이트·응답 헤더·소요 시간·kube-system traefik 로그·backend pod 목록(Terminating 포함)·backend 로그를 stderr 로 출력한다. **이 진단 경로는 실제로 실행된 적이 없다 (미검증)**. 또 Ready 검사는 종료 중 pod 를 제외하고 pod 1개가 Ready 일 때까지 최대 120초 기다리도록 바꿨다
+- **memory_limit 위장 가능**: 사용자가 `memory allocation of N bytes failed` 를 stderr 에 출력하고 abort 하면 memory_limit 으로 분류된다 (status 라벨만 영향, 보안 경계 아님). Rust 외 언어/다른 alloc handler 는 해당 없음. 또 memory_limit 판별은 C API 에 limiter 거부 콜백이 없어서 휴리스틱이다. instantiate 실패 판별은 wasmtime 에러 문자열 매칭(`memory` + `exceeds|limit|minimum`)이라 wasmtime 버전을 올리면 단위 테스트(`TestInitialMemoryOverLimit`)로 재확인해야 한다
+- **동시성 상한 없음**: 동시 요청 수 제한·큐·413/429 는 F-M2-04. 지금은 요청마다 module compile + 최대 10MiB 가 쌓인다 (위 표)
+- CPU limit 을 200m → 1 로 올렸는데 CPU throttling 은 측정하지 않았다 (loop {} 가 CPU 를 쓰므로 잠정)
+- 미검증 가정: WASI stdio 를 설정하지 않았을 때 `fd_pwrite` 등 다른 쓰기 호출이 버려지는지(fd 1/2 의 `fd_write` 만 shadowing 했다). `proc_exit` 코드가 126 이상일 때 wasmtime 동작(단위 테스트에서 810 이 실패해서 6 으로 바꿈, 그 이유는 확인하지 않음)
+- `go mod tidy` 가 `otlpmetricgrpc`, `otel/metric`, `otel/sdk/metric` 3줄을 `// indirect` 에서 direct 로 옮겼다 (이미 직접 import 하던 모듈, tidy 결과)
+- 맥 spike(`rustc --target wasm32-wasip1`, macOS)는 가능성 확인용이고 검증으로 치지 않음
+
+### 다음 단계
+- F-M2-04 limits-queue (64KB 413, 429/큐, 동시 실행 상한 — 요청당 약 +14MB 와 backend limit 512Mi 기준으로 정할 것)
+- Gateway Timeout 이 다시 나오면 `m2-03.sh` 의 DIAG 출력을 첨부해서 원인 조사
+
 ## F-M3-01 kubo-node (브랜치 feat/m3-01-kubo-node)
 
 ### 한 일

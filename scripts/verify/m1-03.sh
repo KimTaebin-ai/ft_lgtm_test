@@ -188,9 +188,9 @@ v="$(printf '%s' "$FSPANS" | pyj "'y' if [s for s in d if s['name']=='POST /api/
 v="$(printf '%s' "$FSPANS" | pyj "sorted(s['name'] for s in d)")"
 [ "$v" = "['POST /api/execute', 'compile', 'ipfs.upload', 'rustc']" ] && pass "compile 실패 trace span 4개 (execute 생략, ipfs.upload 수행)" || fail "compile 실패 trace span='${v}'"
 
-# ---- 7. 느린 요청 (실제 1.5초 busy loop Rust): 전체 2~3초 ----
+# ---- 7. 느린 요청 (실제 2.2초 busy loop Rust): 전체 2~3초 ----
 t0=$(date +%s.%N)
-post 'fn main() { let t = std::time::Instant::now(); while t.elapsed().as_millis() < 1500 {} }'
+post 'fn main() { let t = std::time::Instant::now(); while t.elapsed().as_millis() < 2200 {} }'
 t1=$(date +%s.%N)
 rm -f "$BODY_OUT"
 dt="$(python3 -I -c 'import sys; print(float(sys.argv[2])-float(sys.argv[1]))' "$t0" "$t1")"

@@ -44,14 +44,31 @@ elapsed() { python3 -I -c 'import sys; print("%.2f" % (float(sys.argv[2])-float(
 # num_between <값> <min> <max>
 num_between() { python3 -I -c 'import sys; v,a,b=map(float,sys.argv[1:4]); sys.exit(0 if a<=v<=b else 1)' "$1" "$2" "$3" 2>/dev/null; }
 
-# run <이름> <소스> : 응답 본문을 $TMP/<이름>.json, 벽시계 소요(초)를 $TMP/<이름>.dt 에 남긴다
+# diag_http <이름> <HTTP 코드> <시작 시각 epoch> : /api/execute 가 200 + JSON 이 아닐 때 원인 수집용 출력 (워밍업으로 덮지 않는다)
+diag_http() {
+	local name="$1" code="$2" since="$3" now
+	now="$(date +%s)"
+	{
+		echo "--- DIAG [$name] HTTP ${code} 소요 $(cat "$TMP/$name.dt")s (요청 $(date -d "@$since" '+%T') ~ 응답 $(date '+%T'))"
+		echo "--- DIAG 응답 헤더:"; cat "$TMP/$name.hdr" 2>/dev/null
+		echo "--- DIAG 응답 본문 (앞 300바이트; Traefik 텍스트인지 backend JSON 인지 확인):"; head -c 300 "$TMP/$name.json"; echo
+		echo "--- DIAG backend pod (Terminating 포함):"; k -n "$NS" get pods -l app=backend -o wide 2>&1
+		echo "--- DIAG traefik 로그 (kube-system, 최근 $((now - since + 30))초):"
+		k -n kube-system logs deploy/traefik --since="$((now - since + 30))s" --tail=60 2>&1
+		echo "--- DIAG backend 로그 (최근):"; k -n "$NS" logs deploy/backend --tail=15 2>&1
+	} >&2
+}
+
+# run <이름> <소스> : 응답 본문을 $TMP/<이름>.json, 헤더를 .hdr, 벽시계 소요(초)를 .dt 에 남긴다. 200 이 아니거나 JSON 이 아니면 diag_http
 run() {
-	local name="$1" t0 t1
+	local name="$1" t0 t1 code s0
 	python3 -I -c 'import json,sys; print(json.dumps({"language":"rust","code":sys.argv[1]}))' "$2" >"$TMP/$name.req"
+	s0="$(date +%s)"
 	t0="$(now_s)"
-	lurl -X POST -H 'Content-Type: application/json' --data-binary @"$TMP/$name.req" "http://$HOST/api/execute" >"$TMP/$name.json"
+	code="$(lurl -D "$TMP/$name.hdr" -o "$TMP/$name.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @"$TMP/$name.req" "http://$HOST/api/execute")"
 	t1="$(now_s)"
 	elapsed "$t0" "$t1" >"$TMP/$name.dt"
+	if [ "$code" != "200" ] || [ -z "$(pyj "d['status']" <"$TMP/$name.json")" ]; then diag_http "$name" "$code" "$s0"; fi
 }
 field() { pyj "$2" <"$TMP/$1.json"; } # field <이름> <파이썬 식 (d=응답)>
 status_of() { field "$1" "d['status']"; }

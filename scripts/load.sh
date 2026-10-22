@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LGTM 트래픽 생성기: 정상 / 느린(실제 1.5초 busy loop) / 컴파일 실패 요청을 섞어 POST /api/execute 로 보낸다.
+# LGTM 트래픽 생성기: 정상 / 느린(실제 2.2초 busy loop) / 컴파일 실패 요청을 섞어 POST /api/execute 로 보낸다.
 # verify(m1-04), dashboard 개발(M5), 디펜스 시연에서 재사용한다.
 #
 # 단발 모드 (기본): 정해진 건수를 보내고 끝난다. verify 는 이 모드만 쓴다.
@@ -36,7 +36,7 @@ done
 
 declare -A CODE=(
 	[ok]='fn main() { println!(\"hello\"); }'
-	[slow]='fn main() { let t = std::time::Instant::now(); while t.elapsed().as_millis() < 1500 {} }'
+	[slow]='fn main() { let t = std::time::Instant::now(); while t.elapsed().as_millis() < 2200 {} }'
 	[fail]='fn main() { let x = ; /* __fail_compile__ */ }'
 )
 declare -A SENT=([ok]=0 [slow]=0 [fail]=0) BAD=([ok]=0 [slow]=0 [fail]=0)
