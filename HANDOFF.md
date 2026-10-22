@@ -10,6 +10,47 @@
 ### 다음 단계
 -->
 
+## F-M6-03 image-prefetch (브랜치 feat/m6-03-image-prefetch)
+
+### 한 일
+- `images.txt`(단일 출처, `<role> <image:tag>`): workload 6(mimir/loki/tempo/grafana/collector/kubo), build 5(golang/debian/rust/node/nginx-unprivileged), infra 3(`rancher/k3s`, `ghcr.io/k3d-io/k3d-proxy:5.9.0`, `k3d-tools:5.9.0`. helper 태그는 k3d 바이너리 `strings` 로 확인, VM 에서 실제 pull 됨 확인)
+- `scripts/prefetch-images.sh [role..]`: 호스트에 있으면 skip, 없으면 `timeout 300 docker pull` 을 5회, backoff 5/10/20/40s. 마지막 실패 시 `ERROR: pull 실패 <이미지>` + exit 1. docker 명령(`PREFETCH_DOCKER`)·대기(`PREFETCH_SLEEP`) 주입 가능
+- `scripts/import-images.sh`: workload 를 노드 containerd 로 import. 노드에 이미 있으면 skip(`ctr -n k8s.io images ls -q`, 이름 `docker.io/..` 정규화 매칭). 클러스터 없으면 skip
+- `scripts/check-images.sh`: manifest `image:` ↔ workload, Dockerfile `FROM` ↔ build, `K3S_IMAGE`·`K3D_VERSION` ↔ infra, `:latest`/태그 없음, 모든 `image:` 다음 줄 `imagePullPolicy: IfNotPresent` (grep/awk, Mac 에서도 동작)
+- Makefile: `cluster` 앞에 `prefetch infra`, `build` = prefetch → 자체 이미지 build/import → workload import, 단독 `make images`. `VERIFY_ALL` 끝에 m6-03
+- `scripts/verify/m6-03.sh` (먼저 실패 상태로 커밋 3f17014)
+
+### 중요한 발견 (cold 1차 실패 → 수정)
+- **`k3d image import` 는 workload 6개에서 실패하는데 exit 0 으로 끝난다.** 로그: `ERRO failed to import images in node ... ctr: content digest sha256:... not found` 뒤에 `Successfully imported 6 image(s)`. 원인 추정: Docker 29.9.1 containerd 이미지 스토어에서 멀티아키 이미지를 `docker save` 하면 다른 플랫폼 blob 이 없음 (원인 자체는 미확인, `docker save --platform` 으로 해소되는 것만 확인). 그 결과 노드가 deploy 중 registry 에서 직접 pull (grafana 2m43s, loki 3m38s, mimir 3m02s, collector 2m58s, tempo 3m03s) → 이번 피처가 막으려던 timeout 경로 그대로. 자체 빌드 이미지(단일 플랫폼)는 영향 없었음
+- 수정: `docker save --platform <uname -m 매핑> | docker exec -i <node> ctr -n k8s.io images import -` 로 직접 import 하고, import 후 노드에 실제로 있는지 다시 확인해 없으면 exit 1. **VM 은 aarch64** (`linux/arm64`). 처음 `linux/amd64` 로 시도해 실패 → `uname -m` 매핑으로 변경
+- 자체 이미지 import(`build.sh`, `build-frontend.sh`)는 여전히 `k3d image import`. 단일 플랫폼이라 지금은 성공하지만 실패를 삼키는 점은 같다 (수정 안 함, 범위 밖)
+
+### 된 것 (검증표, 모두 VM `lgtm-vm`, 로그 `~/lgtm-logs/m6-03-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 수정 전 cold: 노드가 workload 를 registry 에서 pull | `m6-03-cold.log` events | 확인(VM): make exit 0 이지만 745s, m6-03.sh 의 events 검사 FAIL (위 pull 시간) |
+| cold(workload+infra 이미지만 rmi 후 `make clean && make`) exit 0 | `m6-03-cold2.log` | 확인(VM): `COLD_MAKE_EXIT=0 secs=560` (이 시간은 호스트의 인터넷 다운로드 포함) |
+| cold 직후 m6-03.sh ALL PASS (14 검사: 목록 이미지 host/노드 존재, 불일치 0, workload 에 Pulling/Pulled 이벤트 0, `already present on machine` 12건, pullPolicy, 재시도 단위 테스트 3종) | 같은 로그 | 확인(VM) `M603_EXIT=0` |
+| cold 후 재실행 `make` exit 0 | 같은 로그 | 확인(VM) `RERUN_MAKE_EXIT=0 secs=20` |
+| warm: `/etc/hosts` 에 registry-1.docker.io, auth.docker.io, ghcr.io → 127.0.0.1 상태에서 `make clean && make` exit 0 | `m6-03-warm.log` | 확인(VM) `WARM_MAKE_EXIT=0 secs=173`, 직후 m6-03.sh ALL PASS, 재실행 exit 0. trap 원복 후 `diff /etc/hosts hosts.orig` 동일 |
+| registry 차단 상태에서 `docker build` 가 FROM 때문에 실패하지 않음 | warm `make` 에서는 자체 이미지 3개가 `[skip] (이미 있음)` 이라 build 가 돌지 않았다. 그래서 차단(curl 000) 상태에서 3개 Dockerfile 을 따로 `docker build` (`m6-03-warmbuild.log`) | 확인(VM): 3개 모두 rc=0. **단 전부 레이어 캐시 히트(0s)**. 소스가 바뀐 재빌드(캐시 미스)는 차단 상태로 시험하지 않았다. 실패 시 대응 옵션은 아직 필요 없어 구현 안 함 |
+| `make verify` 전체 (m1-01 … m6-03) | `m6-03-verify.log` | 확인(VM) `VERIFY_EXIT=0 secs=328` |
+| 재시도 로직: N번째 성공 / 전부 실패(이미지 이름 출력) / 이미 있으면 pull 0 | m6-03.sh 6번 (가짜 docker) | 확인(VM) |
+| 실제 pull 실패 후 재시도가 동작 | — | **미확인**. 이번 VM 실행에서는 pull 이 한 번도 실패하지 않아 `[retry` 로그가 나오지 않았다. 가짜 docker 단위 테스트로만 확인 |
+| main 기준선 (prefetch 전) 소요 시간 | — | 생략 (지시). 기준선 = F-M3-01 의 pull timeout 실패 |
+
+### 안 된 것 / 한계
+- warm 차단은 `/etc/hosts` IPv4 매핑뿐이다. `getent` 에 registry-1.docker.io/auth.docker.io 의 IPv6 주소가 그대로 나왔다. `curl https://registry-1.docker.io/v2/` 는 5s 안에 000 이었으므로 차단된 것으로 봤지만, IPv6 경로가 완전히 막혔다는 증명은 아니다. 또 k3d 노드 컨테이너는 자체 hosts 라 차단되지 않는다: warm 에서도 k3s 시스템 이미지는 실제 인터넷으로 받았다 (아래)
+- **k3s 시스템 이미지 측정 (구현 안 함, 승인 대기)**: 노드가 클러스터 생성 시 직접 pull 하는 8개 (`ctr images ls` 크기 합 약 172MiB): coredns 1.14.7 (20.7MiB, pull 43.5s), klipper-helm v0.13.3-build20260727 (64.7MiB, 28.9~32.9s), busybox 1.37.0 (1.8MiB, 6s), local-path-provisioner v0.0.37 (12.8MiB, 20s), metrics-server v0.9.0 (19.9MiB, 14.9s), klipper-lb v0.4.17 (5.5MiB, 5.1s), traefik 3.7.13 (47.7MiB, 16.7s), pause 3.10.2 (262KiB). 이 네트워크에서는 최대 43s 라 timeout 은 안 났지만, workload 이미지가 같은 네트워크에서 3분 걸렸으므로 느린 평가 환경에서는 같은 위험이 있다. 이벤트의 "in Ns" 는 파드별 값이라 같은 이미지가 중복 표시됨
+  - 처리안 (a) k3s airgap tar(`/var/lib/rancher/k3s/agent/images/`)를 k3d `--volume` 으로 마운트: 이 tar 의 실제 파일명·크기·릴리스 URL 은 **확인하지 않았다** (구현 전에 WebFetch 로 확인 필요). 비용: 다운로드 1회 + host 캐시 디렉토리 + K3S_IMAGE 버전 연동. (b) host 에서 save 후 노드 기동 직후 import 는 k3s 가 이미 pull 을 시작한 뒤라 효과 약함
+- k3d helper 태그는 k3d 버전과 짝(`check-images.sh` 가 K3D_VERSION 으로 검사)
+- `make clean` 은 k3s 시스템 이미지 캐시를 지운다 (cluster 컨테이너와 함께 삭제)
+- PRD 변경 없음
+
+### 다음 단계
+- F-M3-02 ipfs-upload 또는 F-M3-03 (외부 gateway/NAT 도달)
+- 승인 시: k3s 시스템 이미지 airgap 처리 (위 (a), 별도 피처 또는 이 PR 후속)
+
 ## F-M2-03 wasmtime-exec (브랜치 feat/m2-03-wasmtime-exec)
 
 ### 한 일
