@@ -41,16 +41,40 @@ pf_kill() {
 cleanup() { pf_kill; k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
-# pf_start <ns> <svc> <local>:<remote>
+# pf_start <ns> <svc 이름 | pod/이름> <local>:<remote>  (로그: $TMP/pf-<local>.log)
+# svc/ 로 붙으면 시작 시점의 pod 하나에 고정되므로, compiler 는 호출 쪽에서 pod/<이름> 을 넘긴다
 pf_start() {
-	local ns="$1" svc="$2" m="$3" port="${3%%:*}"
-	k -n "$ns" port-forward "svc/$svc" "$m" >/dev/null 2>&1 &
+	local ns="$1" res="$2" m="$3" port="${3%%:*}"
+	case "$res" in */*) ;; *) res="svc/$res" ;; esac
+	k -n "$ns" port-forward "$res" "$m" >"$TMP/pf-$port.log" 2>&1 &
 	PF_PIDS+=("$!")
 	for _ in $(seq 1 30); do
 		(exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0
 		sleep 1
 	done
 	return 1
+}
+
+# compiler_pod_ready: app=compiler pod 가 Ready 인 새 pod 하나만 남을 때까지(Terminating 포함) 기다리고 이름을 출력한다
+compiler_pod_ready() {
+	local i lines n name del ready
+	for i in $(seq 1 120); do
+		lines="$(k -n "$NS" get pod -l app=compiler -o jsonpath='{range .items[*]}{.metadata.name}|{.metadata.deletionTimestamp}|{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null)"
+		n="$(printf '%s\n' "$lines" | grep -c .)"
+		if [ "$n" = "1" ]; then
+			IFS='|' read -r name del ready <<<"$lines"
+			if [ -z "$del" ] && [ "$ready" = "true" ]; then printf '%s' "$name"; return 0; fi
+		fi
+		sleep 1
+	done
+	return 1
+}
+# compiler_debug: 실패 시 pod 상태와 port-forward 로그를 출력한다
+compiler_debug() {
+	echo "--- DEBUG kubectl get pods -l app=compiler -o wide" >&2
+	k -n "$NS" get pods -l app=compiler -o wide >&2
+	echo "--- DEBUG port-forward 로그 ($TMP/pf-$P_COMPILER.log)" >&2
+	cat "$TMP/pf-$P_COMPILER.log" >&2 2>/dev/null
 }
 
 lurl() { curl -s --max-time 60 --resolve "$HOST:80:127.0.0.1" "$@"; }
@@ -106,10 +130,10 @@ n_ing="$(k -n "$NS" get ingress -o jsonpath='{range .items[*]}{.spec.rules[*].ht
 [ "$n_ing" = "0" ] && pass "compiler Ingress 없음 (ClusterIP only)" || fail "compiler 를 가리키는 Ingress 가 있음"
 
 compile() { # <소스> <출력 파일> → HTTP 코드 출력
-	printf '%s' "$1" | curl -s --max-time 60 -o "$2" -w '%{http_code}' -X POST -H 'Content-Type: text/plain' --data-binary @- "http://127.0.0.1:$P_COMPILER/compile"
+	printf '%s' "$1" | curl -s --max-time 60 --retry 10 --retry-connrefused --retry-delay 1 -o "$2" -w '%{http_code}' -X POST -H 'Content-Type: text/plain' --data-binary @- "http://127.0.0.1:$P_COMPILER/compile"
 }
 compile_file() { # <소스 파일> <출력 파일>
-	curl -s --max-time 60 -o "$2" -w '%{http_code}' -X POST -H 'Content-Type: text/plain' --data-binary @"$1" "http://127.0.0.1:$P_COMPILER/compile"
+	curl -s --max-time 60 --retry 10 --retry-connrefused --retry-delay 1 -o "$2" -w '%{http_code}' -X POST -H 'Content-Type: text/plain' --data-binary @"$1" "http://127.0.0.1:$P_COMPILER/compile"
 }
 CODE_OK='fn main() { println!("hello"); }'
 CODE_BAD='fn main() { let x = ; }'
@@ -118,12 +142,13 @@ CODE_BAD='fn main() { let x = ; }'
 # pod 를 재시작해 첫 compile 이 cold(page cache, rustc 첫 로드) 가 되게 한다
 k -n "$NS" rollout restart deploy/compiler >/dev/null 2>&1
 k -n "$NS" rollout status deploy/compiler --timeout=120s >/dev/null 2>&1 || fail "compiler 재시작 후 rollout 실패"
-pf_start "$NS" compiler "$P_COMPILER:80" || fail "port-forward (compiler, 재시작 후) 실패"
+CPOD="$(compiler_pod_ready)" || { fail "compiler 새 pod 하나만 Ready 로 남지 않음"; compiler_debug; }
+pf_start "$NS" "pod/$CPOD" "$P_COMPILER:8080" || { fail "port-forward (compiler, 재시작 후) 실패"; compiler_debug; }
 pf_start observability tempo "$P_TEMPO:3200" || fail "port-forward (tempo, 재시작 후) 실패"
 
 t0=$(now_s); c="$(compile "$CODE_OK" "$TMP/cold.wasm")"; t1=$(now_s)
 COLD="$(elapsed "$t0" "$t1")"
-[ "$c" = "200" ] && pass "POST /compile (cold) → 200 (${COLD}s)" || fail "POST /compile (cold) HTTP ${c}"
+[ "$c" = "200" ] && pass "POST /compile (cold) → 200 (${COLD}s)" || { fail "POST /compile (cold) HTTP ${c}"; compiler_debug; }
 magic="$(head -c4 "$TMP/cold.wasm" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 [ "$magic" = "0061736d" ] && pass "응답 앞 4바이트 \\0asm ($(wc -c <"$TMP/cold.wasm") bytes)" || fail "응답 앞 4바이트='${magic}' (기대 0061736d)"
 t0=$(now_s); c="$(compile "$CODE_OK" "$TMP/warm.wasm")"; t1=$(now_s)
@@ -177,10 +202,9 @@ DSPANS="$(tempo_spans "$DTID" 3)"
 v="$(printf '%s' "$DSPANS" | pyj "[s['error'] for s in d if s['name']=='POST /api/execute'][0]")"
 [ "$v" = "True" ] && pass "internal_error 의 root span 이 ERROR" || fail "root span error='${v}'"
 k -n "$NS" scale deploy/compiler --replicas=1 >/dev/null 2>&1
-# scale 직후 rollout status 는 새 pod 가 생기기 전에 성공을 돌려줄 수 있어, pod 가 생길 때까지 기다린 뒤 Ready 를 본다
-for _ in $(seq 1 30); do [ -n "$(k -n "$NS" get pod -l app=compiler -o name 2>/dev/null)" ] && break; sleep 1; done
-k -n "$NS" wait --for=condition=Ready pod -l app=compiler --timeout=120s >/dev/null 2>&1 || fail "compiler 복구 Ready 실패"
-pf_start "$NS" compiler "$P_COMPILER:80" || fail "port-forward (compiler, 복구 후) 실패"
+# scale 직후 rollout status 는 새 pod 가 생기기 전에 성공을 돌려줄 수 있어, 새 pod 하나만 Ready 로 남을 때까지 기다린다
+CPOD="$(compiler_pod_ready)" || { fail "compiler 복구: 새 pod 하나만 Ready 로 남지 않음"; compiler_debug; }
+pf_start "$NS" "pod/$CPOD" "$P_COMPILER:8080" || { fail "port-forward (compiler, 복구 후) 실패"; compiler_debug; }
 
 # ---- 7. 동시 3건 compile → 전부 완료, 최대 동시 2 (로그의 started/finished 로 확인) ----
 python3 -I -c '
@@ -202,7 +226,7 @@ for i in 1 2 3; do
 	[ "$c" = "200" ] && done_n=$((done_n + 1))
 	info "동시 요청 $i: HTTP $c ${dt}s"
 done
-[ "$done_n" = "3" ] && pass "동시 3건 compile 전부 200" || fail "동시 3건 중 ${done_n}건만 200"
+[ "$done_n" = "3" ] && pass "동시 3건 compile 전부 200" || { fail "동시 3건 중 ${done_n}건만 200"; compiler_debug; }
 k -n "$NS" logs deploy/compiler --since-time="$SINCE" 2>/dev/null >"$TMP/compiler.log"
 PEAK="$(python3 -I -c '
 import json,sys
