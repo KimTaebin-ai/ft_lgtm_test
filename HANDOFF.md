@@ -48,22 +48,22 @@
 | /api/execute success, Tempo service 2개, rustc parent == compile span id | `m2-01.sh` 5번 | 확인(VM) |
 | /api/execute 문법 오류 → compile_error + rustc stderr | `m2-01.sh` 6번 | 확인(VM) |
 | compiler 다운 → HTTP 200 internal_error, message 있음, root span ERROR | `m2-01.sh` 6b | 확인(VM) |
-| compile 시간 cold 0.53s / warm 0.06s (예제 `println!`, pod 재시작 직후 첫 요청 / 그 다음) | `m2-01.sh` 2번 INFO | 확인(VM) |
+| compile 시간 (예제 `println!`, pod 재시작 직후 첫 요청 = cold / 그 다음 = warm): cold **0.53s** → **1.21s**(두 번 실행), warm **0.06s** | `m2-01.sh` 2번 INFO | 확인(VM). cold는 실행마다 편차가 있음 |
 | 15s timeout·프로세스 그룹 kill·임시 디렉토리 삭제·semaphore(peak 2, 대기)·backend handler(internal_error 3종 포함) | `go test ./cmd/compiler/... ./internal/...` (golang 컨테이너). **timeout은 VM에서 15초를 직접 재현하지 않고 단위 테스트(느린 명령 + 자식 프로세스 주입, timeout 단축)로 대체** | 확인(VM) |
-| 동시 3건 compile 전부 200, 직렬화 흔적(peak 2, started 3건) | `m2-01.sh` 7번 | **미확인** (아래) |
-| `make verify-m1` | `m2-01.sh` 9번 | **미확인**: m1-03이 Loki "compile span_id 로그 0건"으로 실패 → 로그 복구 후 재검증 필요 |
-| `bash scripts/verify/m2-01.sh` exit 0 | VM | **미통과** (아래) |
+| 동시 3건 compile 전부 200 (1.76s/1.54s/1.54s), compiler 로그 started 3건, 동시 실행 peak 2 (2+1 직렬화) | `m2-01.sh` 7번 | 확인(VM) |
+| `make verify-m1` 통과 (m1-03 수정·compile span 로그 복구 반영) | `m2-01.sh` 9번 | 확인(VM) |
+| `bash scripts/verify/m2-01.sh` exit 0 (`ALL PASS (m2-01)`, `make verify-m1` 포함) | VM, 로그 `~/lgtm-logs/m2-01-run3.log` | 확인(VM). 3번째 실행에서 통과 (아래 이력) |
 
 ### 안 된 것 / 열린 문제
-- `m2-01.sh`가 아직 exit 0이 아니다. 마지막 실행(로그 `~/lgtm-logs/m2-01-run2.log`)의 **첫 FAIL**: `POST /compile (cold) HTTP 000` (curl 0.03s에 연결 실패). 같은 증상이 이전에 한 번 더 나왔고(그때는 backend → compiler 호출도 20초 timeout), 그 사이 한 번은 통과했다. 원인 미확정: `rollout restart` + `rollout status` 직후 `kubectl port-forward svc/compiler`를 붙이는 구간(pod는 Ready, 같은 pod에 직접 curl하면 200)이 의심되나 확인하지 못했다. 같은 실패 2번이라 수정 시도를 멈추고 보고함
-- 7번(동시 3건)의 첫 실패 원인은 6b에서 scale 0 → 1 복구 직후 `rollout status`가 새 pod 생성 전에 성공을 돌려주는 것으로 추정해 `kubectl wait --for=condition=Ready`로 고쳤으나 **고친 뒤 7번은 아직 통과 확인 전**
-- `make verify-m1`: m1-03 수정(span 수, fail 코드, compile 로그 복구) 후 전체 재실행 확인 전
+- **`m2-01.sh` 실패 이력**: 1번째 실행은 `wait`(인자 없음)가 백그라운드 port-forward를 기다려 멈춤 → 대상 PID만 기다리도록 수정. 2번째는 6b 복구 직후 동시 3건 HTTP 000, 3번째 실행은 첫 compile HTTP 000 (두 번째 발생). 이 둘의 원인으로 "svc/ port-forward가 시작 시점 pod 하나에 고정되어 Terminating 중인 옛 pod 또는 새 pod 준비 전에 붙음"을 가정하고 verify를 고침: 새 pod 하나만 Ready로 남을 때까지 대기 → `pod/<이름>`으로 port-forward → 첫 요청 `curl --retry 10 --retry-connrefused`. 고친 뒤 3번째 실행에서 통과. **원인을 pod/endpoint 상태로 직접 증명한 것은 아니다** (수정 후 재현되지 않음). 재발하면 verify의 실패 시 디버그 출력(`get pods -o wide`, pf 로그)을 먼저 본다
+- 서비스(backend → compiler)는 ClusterIP DNS로 호출하며 verify 6~7번에서 통과했다. 위 HTTP 000은 verify 쪽 port-forward 문제로 판단하나, 첫 실패 때 backend → compiler 20초 timeout이 한 번 같이 있었다 (같은 시점, 원인 미확인)
+- 15초 timeout은 VM에서 직접 재현하지 않고 단위 테스트로 대체 (위 표)
 - 413/429, deny-list, 하드닝은 범위 밖 (F-M2-02, F-M2-04)
+- compiler 이미지 1.32GB (slim rust + wasm32-wasip1 target). 크기 최적화는 하지 않음
 
 ### 다음 단계
-1. 위 열린 문제: 첫 compile HTTP 000 원인 확인(port-forward 대상 pod / 재시작 직후 상태를 `kubectl get endpoints compiler`와 함께 기록) 후 `m2-01.sh`, `make verify-m1` exit 0 확인
-2. F-M2-02 compiler-hardening (securityContext, `env -i`, NetworkPolicy, read-only rootfs, 7.3 deny-list)
-3. F-M4-01 merge 체크리스트(아래 블록)의 build/deploy 통합은 이 브랜치를 rebase한 뒤 진행
+1. F-M2-02 compiler-hardening (securityContext, `env -i`, NetworkPolicy, read-only rootfs, 7.3 deny-list)
+2. F-M4-01 merge 체크리스트(아래 블록)의 build/deploy 통합은 이 브랜치가 main에 merge된 뒤 진행 (이 브랜치는 이미 origin/main 위로 rebase됨, Makefile 충돌 없음)
 
 ## F-M4-01 frontend-shell (브랜치 feat/m4-01-frontend-shell)
 
