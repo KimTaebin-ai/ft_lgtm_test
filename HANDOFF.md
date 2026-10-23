@@ -10,6 +10,31 @@
 ### 다음 단계
 -->
 
+## F-M6-01 readme (브랜치 feat/m6-01-readme)
+
+### 한 일
+- `README.md`(영어, 신규): 첫 줄 이탤릭 + Description / Instructions / Architecture(Mermaid 2개) / Technical choices / Security model / Observability / IPFS and NAT / Demo walkthrough / Make targets / Known limitations / Resources(`### Use of AI`). 출처는 PRD 1·2·4·5·7~11장, HANDOFF, Makefile, images.txt, k8s/, 코드(제한값은 `wasmexec.go`, `runner.go`, `compiler.yaml` 로 대조). 스크린샷 없음, 코드·manifest·Makefile 동작·PRD 변경 없음.
+- `docs/evidence/ipfs-check-utm-bridged-20261023.txt`(사용자가 실행한 `make ipfs-check` 출력), `docs/evidence/ipfs-check-utm-shared-20261023.txt`(VM `~/lgtm-logs/m3-03-run3.log` 를 그대로 복사, 헤더 1줄만 추가). README 의 IPFS and NAT 표가 링크한다.
+- `scripts/verify/m6-01.sh`(먼저 실패 상태로 커밋 7129ab7) + `Makefile` `VERIFY_ALL` 끝에 `m6-01`(목록만, 동작 변경 아님).
+
+### README 에서 정한 표현 (사용자 지시)
+- UTM Bridged `first_blocked=router`, Shared `first_blocked=utm` 은 둘 다 **추정(inferred)** 으로 쓰고 `docs/evidence/` 로 근거를 단다. Bridged 에서도 public gateway 0/5.
+- ipfs.io: 종료 날짜를 쓰지 않는다(공지가 ipfs.io 를 명시하지 않음). curl 429, 브라우저 흉내 403, "service worker gateway 로 전환 중, 브라우저 동작은 측정 안 함" 만 쓴다.
+- Use of AI: Claude Code 는 git/HANDOFF/CLAUDE.md 로 확인한 사실만(`4d34bde` 기준 non-merge 93개 중 trailer 89개, trailer 없는 4개는 `d86043d` 와 CLAUDE.md 규칙 수정 3개, merge 21개; 모두 명령으로 센 값). claude.ai chat 사용은 사용자 제공 문장이며 git 으로 확인 불가라고 README 에 명시.
+
+### 된 것 / 안 된 것
+- 검증표 참고.
+- 남은 자리표시: `【login】`(첫 줄, 사용자가 알려주면 교체), `【F-M6-04 결과】`(Known limitations 1줄, 배포 직후 504 와 `make verify` 전체 통과 여부를 한 자리표시로 합침), `【사람이 직접 한 작업·검토 범위】`(Use of AI 마지막 줄, git/HANDOFF 로 확인할 수 없는 수동 작업).
+- README 의 "호스트 PC 접속" 은 옵션 안내이며 verify 대상이 아니다. "UTM Shared 에서 호스트가 VM IP 로 접근 가능"은 frontend dev proxy 설정(`LGTM_VM_URL`)에 근거한 것이고 따로 확인하지 않았다.
+- 이미지/버전 번호가 바뀌면 README Technical choices 표도 고쳐야 한다(m6-01.sh 가 불일치를 FAIL 로 잡는다).
+
+### 다음 단계
+- F-M6-04 결과로 `【F-M6-04 결과】` 채우기. HANDOFF.md / Makefile `VERIFY_ALL` conflict 는 나중에 merge 되는 쪽이 양쪽 항목을 모두 남긴다.
+- 사용자: `【login】`, `【사람이 직접 한 작업·검토 범위】` 채우기.
+
+### 검증표
+(VM 실행 후 채운다)
+
 ## F-M5-03 dashboard-traces (브랜치 feat/m5-03-dashboard-traces)
 
 ### 한 일

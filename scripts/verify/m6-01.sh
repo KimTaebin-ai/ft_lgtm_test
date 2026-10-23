@@ -73,14 +73,17 @@ done
 # ---- 5. 버전 ----
 known="$( { awk '!/^[[:space:]]*(#|$)/{print $2}' images.txt | sed 's/.*://'; \
 	grep -E '^[A-Z0-9_]+_VERSION[[:space:]]*:=|^K3S_IMAGE[[:space:]]*:=' Makefile | sed -E 's/^[^=]*=[[:space:]]*//; s/.*://'; \
-	grep -E '^DOCKER_VERSION_STR' Makefile | sed -E 's/^[^=]*=[[:space:]]*//'; } | sort -u)"
+	grep -E '^DOCKER_VERSION_STR' Makefile | sed -E 's/^[^=]*=[[:space:]]*//'; \
+	grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' backend/go.mod; \
+	grep -oE '"[~^]?[0-9]+\.[0-9]+\.[0-9]+"' frontend/package.json | tr -d '"~^'; } | sort -u)"
 # 이미지 참조(repo/name:tag)는 images.txt 에 그대로 있어야 한다
 for ref in $(grep -oP '`\K[a-z0-9.-]+(/[a-z0-9._-]+)+:[A-Za-z0-9._-]+(?=`)' "$README" | sort -u); do
 	if awk '!/^[[:space:]]*(#|$)/{print $2}' images.txt | grep -qxF "$ref"; then pass "이미지 $ref 가 images.txt 와 일치"
 	else fail "이미지 $ref 가 images.txt 에 없음"; fi
 done
 # X.Y.Z 형태 버전 번호는 images.txt / Makefile 고정 값에 있어야 한다 (v 접두는 무시)
-for v in $(grep -oP '(?<![\w.])v?\d+\.\d+\.\d+(?!\.?\d)' "$README" | sort -u); do
+# (URL 안의 버전은 문서 주소의 일부라 제외한다)
+for v in $(sed -E 's#https?://[^ )>`]*##g' "$README" | grep -oP '(?<![\w.])v?\d+\.\d+\.\d+(?!\.?\d)' | sort -u); do
 	bare="${v#v}"
 	if grep -qE "(^|[^0-9.])v?${bare//./\\.}([^0-9.]|\$)" <<<"$known"; then pass "버전 $v 가 고정 값과 일치"
 	else fail "버전 $v 가 images.txt / Makefile 고정 값에 없음"; fi
