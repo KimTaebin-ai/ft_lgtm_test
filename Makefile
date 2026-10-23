@@ -71,6 +71,7 @@ deploy:
 	done
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-grafana dummy-lgtm dummy-ipfs --ignore-not-found
 	@bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health
+	@bash scripts/wait-dashboards.sh 150
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/00-namespace.yaml
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/
 	@kubectl --context k3d-$(CLUSTER_NAME) -n ipfs rollout status statefulset/kubo --timeout=300s
