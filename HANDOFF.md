@@ -10,6 +10,53 @@
 ### 다음 단계
 -->
 
+## F-M3-03 external-gateway (브랜치 feat/m3-03-external-gateway)
+
+### 한 일
+- `scripts/ipfs-check.sh` + `make ipfs-check` (make all 에 넣지 않음). `kubectl exec kubo-0 -- ipfs ...` 로 진단, 출력 형식 `[ipfs-check] S1..S9 PASS|FAIL|INFO|SKIP`, `GATEWAY <host> <code> <secs> <ok|mismatch|policy|noconn|fail>`, `CID`, `SUMMARY first_blocked=<vm-4001|utm|router|internet|none|unknown> reason=...`. gateway 실패는 exit 0
+  - S1 VM 내부 4001 (kubo listen / docker 매핑 / 호스트 127.0.0.1:4001 multistream), S2 swarm peers, S3 우리 주소(공인·사설·`/p2p-circuit` 수, dcutr·relay client 프로토콜), S4 AutoNAT v2 reachability(`ipfs swarm addrs autonat --enc=json`), S5 8.8kB 테스트 파일(시각 포함) add+pin+`ipfs provide once`, S6 로컬 gateway, S7 delegated routing 에 우리 PeerID(광고됨, 최대 60s 재시도), S8 외부 ipfs-check 백엔드(도달 가능, 90s), S9 public gateway 5곳 병렬(각 90s)
+  - 층 판정: S1 실패=`vm-4001`(증명), peers 0 또는 광고 안 됨=`internet`. AutoNAT Private 이면 VM 기본 게이트웨이가 `192.168.64.*`/`10.0.2.*` 일 때 `utm`, 다른 사설이면 `router` — **둘 다 VM 안에서는 추정(inferred)**. 단서로 기본 게이트웨이와 traceroute 의 사설 hop 수를 출력 (traceroute 없으면 "도구 없음", 설치 안 함)
+- `scripts/verify/m3-03.sh` (먼저 실패 상태로 커밋 14d006d), `make verify` 에 m3-03 추가. public gateway 성공 여부는 통과 조건 아님
+- 변경 없음: backend/, k8s/, UTM·공유기
+
+### 실측 (VM lgtm-vm, 현재 환경: UTM QEMU 백엔드 + Shared Network, 포워딩 없음, 로그 `~/lgtm-logs/m3-03-run3.log`)
+first_blocked=utm (inferred). 관측한 것:
+- S1 PASS, S2 PASS(peers 16~41): VM 안과 아웃바운드는 정상
+- S3: 공인 직접 주소 0개, 사설/loopback 6개, **relay(`/p2p-circuit`) 주소 5~6개(relay 노드 2개)**, dcutr·relay client 프로토콜 광고. `Swarm.RelayClient.Enabled`/`EnableHolePunching` 은 config 에 키가 없다 (`ipfs config` → not found = 기본값 사용. config.md v0.43.1 기본값 true). relay 주소를 실제로 얻으므로 relay client 동작은 확인
+- S4: AutoNAT `Reachability: Private`, per-address 데이터 없음 → 밖에서 4001 직접 접속 불가
+- S7: **delegated-ipfs.dev 에 광고됨** (provide 직후 0~30s 안). 단 Addrs 는 전부 `/p2p-circuit` (relay 경유 주소만). → "광고됨" ≠ "도달 가능"
+- S8: ipfs-check 백엔드(`ipfs-check-backend.ipfs.io` = 15.204.31.98:443) 에 이 VM 에서 TCP 접속이 timeout (curl -4 `Connection timed out after 15003 ms`, IPv6 는 VM 에 경로 없음 `Network is unreachable`). **판정 불가(SKIP)**. 원인(서비스 다운/차단)은 확인 못 함
+- S9: public gateway 5곳 모두 실패 (아래)
+
+| gateway | 결과 | 의미 |
+|---|---|---|
+| ipfs.io | 429 (`switching to a service worker gateway only`), 브라우저 흉내 요청은 403 `blocked` | **HTTP gateway 서비스 종료/차단. NAT 와 무관** (gatewaychanges.ipfs.io: 2026-09-21 UTC 종료로 안내, 공지 페이지에 도메인 언급은 없음) |
+| dweb.link | DNS 해석 timeout (VM 에서 `getent hosts dweb.link` 결과 없음) | NAT 와 무관 |
+| gateway.pinata.cloud | 404 `timed out searching for a file on the non-pinata IPFS network` (62s) | 실제로 찾아봤고 못 받음 = 유일하게 의미 있는 부정 결과 |
+| trustless-gateway.link | 525/522 (Cloudflare 오류, 20s) | gateway 쪽 문제 |
+| 4everland.io | 504 (31s, 서브도메인으로 redirect) | 못 받음 |
+
+- **relay 경유 소형 파일(8.8kB < 10kB) 실측 — 받아간 곳 없음**: ① 위 gateway 중 받은 곳 0. ② 독립 노드(VM 에서 `docker run ipfs/kubo:v0.43.1`, 별도 PeerID, 44 peers) 가 `ipfs cat /ipfs/<CID>` 를 시도: 120s timeout(우리 노드와 연결 0), 별도 시도에서 우리 relay 주소로 `ipfs swarm connect` 가 2번은 `success`였지만 직후 `cat --timeout=30s` 실패, 또 다른 시도에서는 `connect` 자체가 `all dials failed`. 우리 노드 bitswap `blocks sent: 0`. **관측된 사실만 기록한다: 연결(relay)은 될 때도 있으나 블록 전송은 한 번도 성공하지 않았다. 원인은 확인하지 못했다** (circuit v2 기본 limit 은 스펙에 없고 relay 별 설정. 의심: 제한된(relay) 연결에서 bitswap 이 동작하지 않을 수 있으나 검증 안 함). 원인 불명 간헐 실패라 정보 수집 후 추가 재현은 하지 않았다
+- 포워딩 없는 현재 상태 결론: **public gateway 에서 열리지 않는다. relay/hole punching 으로도 이번 실측에서는 안 열렸다.**
+
+### 된 것 / 안 된 것 (검증표는 아래)
+- 된 것: `make ipfs-check` 가 끝까지 실행되고 층을 출력, 로컬 gateway 에서 테스트 CID 열림, relay 주소 획득·광고됨까지 확인
+- 안 된 것: public gateway 에서 CID 열림(IP-06), 외부 프로브(S8). 이번 PR 에서 UTM·공유기는 변경하지 않음
+
+### PRD 영향 — 결정 필요
+- **IP-06(`ipfs.io/ipfs/<CID>` 에서 접근) 은 NAT 를 해결해도 ipfs.io HTTP gateway 가 2026-10-23 현재 429/403 이라 충족할 수 없다.** subject V.1.4 의 "public gateway 에서 같은 CID" 는 열리는 다른 gateway(예: gateway.pinata.cloud 는 응답하며 조회함)로 보여야 한다. "PRD 변경: IP-06 ipfs.io → 응답하는 public gateway 목록(`ipfs-check` 가 확인), 이유: ipfs.io HTTP gateway 종료" — 승인 대기. 코드는 바꾸지 않았다
+
+### README용 NAT 메모
+- 되는 조건: VM 의 4001 tcp/udp 가 외부에서 직접 닿을 것 = AutoNAT `Public` + `ipfs id` 에 공인 직접 주소. 이 조건에서 DHT 에 직접 주소로 광고되고 gateway 가 bitswap 으로 받아간다 (이 조건은 아직 실측하지 못했다)
+- 안 되는 조건(실측): UTM Shared Network(NAT) 뒤 + 포워딩 없음 → AutoNAT Private, 광고는 relay 주소만, gateway 에서 안 열림
+- UTM (문서 확인, 변경은 사용자): "Port forwarding is only available on QEMU backend virtual machines using Emulated VLAN network mode" (docs.getutm.app/settings-qemu/devices/network/port-forwarding/). **현재 VM 은 QEMU + Shared Network 라 문서상 UTM 포워딩을 쓸 수 없다**(Shared 에서의 포워딩은 문서에 언급 없음 = 지원 문서 없음). 선택지: ① Emulated VLAN 으로 바꾸고 4001 tcp/udp 포워딩 + 공유기 포워딩(두 겹), ② Bridged(VM 이 LAN IP 를 직접 받음 → 공유기 포워딩 한 겹. 문서는 "advanced, Wi-Fi 는 추가 설정"만 언급, 포워딩과의 관계는 추론)
+- 디펜스 대안: 모바일 핫스팟(통신사 CGNAT 면 인바운드 불가일 수 있음, 미검증), 공유기 포워딩 가능한 망, 안 되면 `make ipfs-check` 출력으로 막힌 층과 relay 한계를 설명
+- ipfs.io 는 위 PRD 영향 참고
+
+### 다음 단계
+- F-M5-01 instrumentation
+- 승인 필요: IP-06 문구 변경, UTM 네트워크 모드 변경(사용자 수행) 후 `make ipfs-check` 재실행
+
 ## F-M6-03 image-prefetch (브랜치 feat/m6-03-image-prefetch)
 
 ### 한 일

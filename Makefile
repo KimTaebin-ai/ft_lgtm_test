@@ -115,8 +115,9 @@ verify:
 verify-m1:
 	$(call run_verify,verify-m1,$(VERIFY_M1))
 
+# 네트워크 상태에 의존하므로 make all 에 넣지 않는다 (scripts/ipfs-check.sh, F-M3-03)
 ipfs-check:
-	@echo "TODO F-M3-03"
+	@bash scripts/ipfs-check.sh
 
 # /etc/hosts 는 건드리지 않는다 (fclean은 F-M6-02)
 clean:
