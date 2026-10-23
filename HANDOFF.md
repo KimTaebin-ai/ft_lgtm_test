@@ -10,6 +10,56 @@
 ### 다음 단계
 -->
 
+## F-M5-03 dashboard-traces (브랜치 feat/m5-03-dashboard-traces)
+
+### 한 일
+- `dashboards/lgtm-traces.json`(신규): uid `lgtm-traces`, title `LGTM Traces`, refresh 5s. F-M5-02 provisioning(`make deploy` → ConfigMap → `wait-dashboards.sh`)을 그대로 썼고 코드·datasource 설정은 바꾸지 않았다. 패널 5개:
+  - Trace duration over time (exemplar): Mimir `histogram_quantile(0.95, sum by (le) (rate(lgtm_execution_duration_seconds_bucket[$__rate_interval])))`, exemplar ON
+  - Mean duration (exemplar): `sum(rate(_sum[$__rate_interval])) / sum(rate(_count[$__rate_interval]))` + bucket 쿼리(B, 선 숨김)를 exemplar 용으로 겹침
+  - Longest duration: Tempo TraceQL metrics `{ name = "POST /api/execute" } | max_over_time(duration)`
+  - Slowest executions: Tempo TraceQL `{ name = "POST /api/execute" }`, limit 200, table, sortBy `Duration` 내림차순. Longest 바로 옆(오른쪽)
+  - 실패 trace(권장): `{ name = "POST /api/execute" && span.lgtm.status != "success" }` table
+- Mimir 쿼리의 rate 구간은 Dashboard 1 과 같은 `[$__rate_interval]` 로 통일했다.
+- `k8s/observability/tempo.yaml` 상단 주석만 3.x 기준으로 정정(설정 값·ConfigMap 내용 불변; 주석은 data 블록 밖).
+- `scripts/verify/m5-03.sh`(먼저 실패 상태로 커밋 e992bba) + `Makefile` VERIFY_ALL 끝에 `m5-03`.
+
+### PRD 해소 / 변경
+- **PRD 14장 해소: Longest = TraceQL metrics, Tempo 설정 변경 없음, 실측 지연 약 50초(1회).** Tempo 3.1.0 은 `local_blocks` 가 제거됐고(3.0) TraceQL metrics 는 live-store/RF1 블록을 읽어 추가 설정 없이 동작한다. PRD 8.6 의 "local-blocks processor 필요" 문구와 다르다. 메모리는 쿼리 전 70Mi → 후 72Mi(limit 512Mi).
+- **PRD 변경: 8.6 Slowest 의 `duration > 1s` 조건 제거. 이유: 정상 실행이 대부분 1초 미만이라 조건이 있으면 표가 비기 때문.** 대신 limit 200 + Duration 내림차순 정렬.
+
+### 된 것
+- 4개 필수 패널 쿼리가 `/api/ds/query` 로 non-empty, Slowest 정렬 정의가 응답 field 와 일치, duration 시계열 패널 3개(Trace duration / Mean / Longest) 응답에 exemplar, exemplar id 로 Tempo trace 조회 가능 (m5-03.sh ALL PASS, 40건).
+- 수동 확인: 사용자가 VM Firefox 에서 직접 확인(2026-10-23), 스크린샷 없음. S4 5단계(실패 수 → exemplar → trace → Related logs → ipfs.cid 로 output.txt), S3 3건(timeout, memory_limit, truncated), Dashboard 2 패널 5개(exemplar 클릭, Slowest 정렬, 실패 trace 표).
+
+### 알려진 사실 / 한계
+- Slowest 정렬은 브라우저의 sortBy 가 한다. Tempo 응답은 최근 순이고 field `traceDuration` 의 표시 이름이 `Duration` 이다(verify 는 정의와 응답 field 이름을 대조).
+- **TraceQL metrics exemplar 의 traceId 는 앞자리 0 이 빠져 30~31자로 올 수 있다.** Tempo 는 짧은 id 도 같은 trace 로 조회한다(HTTP 200, 동일 본문). verify 는 hex 1~32자 + 조회 성공으로 본다.
+- Longest 의 exemplar 는 최댓값을 낸 trace 가 아닐 수 있다. 가장 긴 trace 는 Slowest 표에서 연다.
+- 지연 약 50초는 새 trace 1회 측정이다. 이후 verify 는 기존 trace 가 있어 polling 0초였다(상한 120초).
+
+### 안 된 것
+- **`make verify` 전체 exit 0 아님 (완료 기준 7 미충족).** 전체 실행은 `m2-04` 에서 중단(exit 2)되어 뒤의 verify 는 개별 실행했다.
+  1. `m2-04`: `lgtm_executions_total` increase() = 12 (기대 11). F-M5-01 때와 같은 증상(`m2-03` 직후). F-M5-01 에서 고친 wait_stable 이후에도 재발했다. 정보 수집 1회(`~/lgtm-logs/m5-03-m2-04-info.log`): 최근 30분 status 별 증가분에 `internal_error` 1건이 있었으나 어느 요청인지 귀속하지 못했다. 원인 미확인, 재현 시도 안 함.
+  2. `m5-02`(개별 실행): backend 재시작 직후 첫 요청이 HTTP 504 `Gateway Timeout` (F-M5-02 에서 기록한 간헐 실패와 같은 위치). 원인 미확인, 재현 시도 안 함. 가설(미확인): rollout 직후 Traefik 이 이전 pod 로 보냄.
+  3. 나머지(m1-01~m2-03, m3-01, m3-02, m4-01, m4-02, m6-03, m3-03, m5-01, m5-03)는 통과.
+- 이 피처의 수정으로 인한 실패는 아니다(m5-03 은 Dashboard 2 와 tempo.yaml 주석만 추가). 다만 "전체 exit 0" 은 확인하지 못했다.
+
+### 다음 단계
+- F-M6-01 readme.
+- 위 간헐 실패 2건(m2-04 12≠11, m5-02 재시작 직후 504)을 별도로 다룰지 결정.
+
+### 검증표 (VM `lgtm-vm`, 로그 `~/lgtm-logs/m5-03-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 구현 전 m5-03.sh 실패 | `m5-03-red.log` | 확인(VM): FAIL 3건(파일·ConfigMap 키·uid 없음) |
+| 구현 후 m5-03.sh 통과 (dashboard 존재/provisioned/refresh, 4개 패널 non-empty, rate 구간 통일, Slowest 정렬·limit, exemplar, Longest polling) | `m5-03-green2.log`, `make clean && make` 후 `m5-03-verify-rest.log` | 확인(VM): ALL PASS (40건 / 전체 실행 시 동일) |
+| Tempo 설정 변경 없음, 주석 변경으로 재시작 없음 | deploy 전후 `tempo-0` restartCount 0, pod 생성 07:18:23Z 불변, 로그 `configmap/tempo-config unchanged` | 확인(VM) |
+| Longest 값이 실제 최장 trace 와 같다 | spike: max 0.218s = Tempo search 최장 218ms | 확인(VM, spike) |
+| exemplar 클릭 → trace 열림 | verify: exemplar id 로 Grafana→Tempo `/api/traces/<id>` 200 + root span; 수동: 사용자가 Firefox 에서 직접 | API 확인(VM) / 수동 확인(사용자, 2026-10-23, 스크린샷 없음) |
+| S4, S3, 패널 5개 동작 | 수동 | 수동 확인: 사용자가 VM Firefox 에서 직접 확인(2026-10-23), 스크린샷 없음 |
+| `make clean && make`, 이어서 `make` | `m5-03-clean-make.log`, `m5-03-make2.log` | 확인(VM): 둘 다 exit 0 |
+| 전체 `make verify` exit 0 | `m5-03-verify-all.log`, `m5-03-verify-rest.log` | **미충족**: m2-04 FAIL 로 exit 2, 나머지는 개별 실행(m5-02 FAIL 1건, 그 외 통과) |
+
 ## F-M5-02 dashboard-metrics (브랜치 feat/m5-02-dashboard-metrics)
 
 ### 한 일
