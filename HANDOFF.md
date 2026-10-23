@@ -49,6 +49,7 @@ first_blocked=utm (inferred). 관측한 것:
 | `make ipfs-check` 가 끝까지 실행되고 S1~S9·GATEWAY·SUMMARY 출력, exit 0 | `m3-03-run3.log`, `m3-03-verify.log` | 확인(VM) 약 95s |
 | m3-03.sh ALL PASS (19 검사: 형식, 로컬 gateway 200, 파일 8848B, HANDOFF 기록) | `m3-03-verify.log`, S7 판정 수정 후 `m3-03-verify2.log` | 확인(VM) |
 | `make verify` 전체 exit 0 (m3-03 포함) | `m3-03-fullverify.log` `VERIFY_EXIT=0` 7m30s | 확인(VM). **단 이 실행은 S7 수정 전 스크립트**였고 수정 후에는 m3-03.sh 만 다시 실행 |
+| origin/main(F-M2-04) merge 후 `make` exit 0, `make verify` 전체 exit 0 (m2-04, m3-03 모두 포함, Makefile VERIFY_ALL 에 둘 다 남김, HANDOFF 두 블록 유지) | `m3-03-merge-make.log` `MAKE_EXIT=0` 24s, `m3-03-merge-verify.log` `VERIFY_EXIT=0` 555s | 확인(VM). 이 실행의 ipfs-check 는 AutoNAT=**Unknown**(kubo 재기동 직후라 판정 데이터 없음으로 추정, 미확인), S7 은 60s 안에 광고 안 보임 → `first_blocked=utm` (inferred), reason 에 S7 지연 덧붙임. 수정한 판정 순서가 의도대로 동작 |
 | S7 광고됨 | delegated-ipfs.dev | **실행마다 다름**: 0s, 30s 후 PASS, 한 번은 60s 안에 미반영(FAIL → 당시 스크립트가 `first_blocked=internet` 으로 오판해서 수정: 광고 지연은 AutoNAT Private 판정보다 뒤). 지연 원인은 미확인 |
 | 포워딩 없는 현재 상태에서 public gateway 열림 | S9 | **안 열림 (0/5)**. 위 gateway 표 |
 | relay 경유 소형 파일 전송 | 독립 Kubo 노드 `ipfs cat` | **받아간 적 없음**. 정확한 에러: `Error: context deadline exceeded` (cat, 120s·30s·45s timeout 3회). 별도로 `ipfs swarm connect <우리 /p2p-circuit 주소>` 는 `success` 2회, 다른 시도에서 `Error: connect ... failure: failed to dial: ... all dials failed`. 우리 노드 bitswap blocks sent 0 |
