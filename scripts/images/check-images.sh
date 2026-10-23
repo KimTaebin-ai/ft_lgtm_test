@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# images.txt 와 k8s manifest / Dockerfile / Makefile 의 불일치를 검사한다 (불일치 0 이어야 exit 0). Mac/Linux 공용(grep/awk).
+# k8s/images.txt 와 k8s manifest / Dockerfile / Makefile 의 불일치를 검사한다 (불일치 0 이어야 exit 0). Mac/Linux 공용(grep/awk).
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 fails=0
 fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
 
-role_images() { awk -v r="$1" '!/^[[:space:]]*(#|$)/ && $1 == r {print $2}' images.txt | sort -u; }
+role_images() { awk -v r="$1" '!/^[[:space:]]*(#|$)/ && $1 == r {print $2}' k8s/images.txt | sort -u; }
 
 # compare <이름> <list에서 나온 값> <실제로 쓰인 값>
 compare() {
 	local only_list only_used
 	only_list="$(comm -23 <(printf '%s\n' "$2") <(printf '%s\n' "$3"))"
 	only_used="$(comm -13 <(printf '%s\n' "$2") <(printf '%s\n' "$3"))"
-	[ -z "$only_used" ] || fail "$1: 사용 중인데 images.txt 에 없음: $(echo $only_used)"
-	[ -z "$only_list" ] || fail "$1: images.txt 에만 있고 사용처 없음: $(echo $only_list)"
+	[ -z "$only_used" ] || fail "$1: 사용 중인데 k8s/images.txt 에 없음: $(echo $only_used)"
+	[ -z "$only_list" ] || fail "$1: k8s/images.txt 에만 있고 사용처 없음: $(echo $only_list)"
 }
 
 # workload: k8s/**/*.yaml 의 image: (치환 자리표시자 __X__ 제외)
@@ -33,14 +33,14 @@ compare build "$(role_images build)" "$used_build"
 # infra: Makefile K3S_IMAGE 가 목록에 있어야 한다 (k3d helper 는 k3d 버전과 짝이라 존재 여부만 본다)
 k3s="$(sed -n 's/^K3S_IMAGE[[:space:]]*:=[[:space:]]*//p' Makefile | head -1)"
 [ -n "$k3s" ] || fail "Makefile 에서 K3S_IMAGE 를 못 찾음"
-role_images infra | grep -qxF "$k3s" || fail "infra: Makefile K3S_IMAGE($k3s) 가 images.txt 에 없음"
+role_images infra | grep -qxF "$k3s" || fail "infra: Makefile K3S_IMAGE($k3s) 가 k8s/images.txt 에 없음"
 k3d_v="$(sed -n 's/^K3D_VERSION[[:space:]]*:=[[:space:]]*v//p' Makefile | head -1)"
 for h in k3d-proxy k3d-tools; do
-	role_images infra | grep -qxF "ghcr.io/k3d-io/$h:$k3d_v" || fail "infra: ghcr.io/k3d-io/$h:$k3d_v (K3D_VERSION 과 짝) 가 images.txt 에 없음"
+	role_images infra | grep -qxF "ghcr.io/k3d-io/$h:$k3d_v" || fail "infra: ghcr.io/k3d-io/$h:$k3d_v (K3D_VERSION 과 짝) 가 k8s/images.txt 에 없음"
 done
 
 # 태그 고정: 태그 없음 / :latest 금지
-bad_tag="$(grep -vE '^[[:space:]]*(#|$)' images.txt | awk '$2 ~ /:latest$/ || $2 !~ /:/ {print $2}')"
+bad_tag="$(grep -vE '^[[:space:]]*(#|$)' k8s/images.txt | awk '$2 ~ /:latest$/ || $2 !~ /:/ {print $2}')"
 [ -z "$bad_tag" ] || fail "태그 없음/:latest: $(echo $bad_tag)"
 
 # imagePullPolicy: manifest 의 모든 image: 줄 바로 다음 줄이 IfNotPresent

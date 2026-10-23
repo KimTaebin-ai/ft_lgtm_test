@@ -19,7 +19,7 @@ const (
 
 // status.json 에 넣는 컴파일러 정보. 같은 코드·결과면 같은 CID 가 나와야 하므로 요청마다 달라지는 값
 // (timestamp, trace_id, 요청 ID, timings)은 넣지 않는다.
-// rustcVersion 은 backend/Dockerfile.compiler 의 rust 이미지 태그와 같아야 한다 (scripts/verify/m3-02.sh 가 비교한다).
+// rustcVersion 은 backend/Dockerfile.compiler 의 rust 이미지 태그와 같아야 한다 (scripts/verify/m3-02-ipfs-upload.sh 가 비교한다).
 const (
 	rustcVersion = "1.99.1"
 	rustEdition  = "2021" // backend/internal/compile/runner.go 의 --edition

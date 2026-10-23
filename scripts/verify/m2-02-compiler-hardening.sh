@@ -160,7 +160,7 @@ magic="$(head -c4 "$TMP/o.wasm" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 [ "$magic" = "0061736d" ] && pass "compile 응답 \\0asm (readOnlyRootFilesystem 상태)" || fail "compile 응답 앞 4바이트='${magic}'"
 
 # ---- 6. 단위 테스트 (회귀 m2-01, m1-* 는 make verify 가 순서대로 실행한다) ----
-if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local \
+if "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local \
 	golang:1.27.3-trixie go test -count=1 ./cmd/compiler/... ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test (deny-list, env 목록 포함) 통과"
 else fail "go test 실패: $(tail -20 "$TMP/gotest.log")"; fi

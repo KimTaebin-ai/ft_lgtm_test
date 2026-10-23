@@ -21,7 +21,7 @@ CLUSTER_NAME="$(var CLUSTER_NAME)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 NS="lgtm"
 HOST="lgtm.local"
-D=scripts/with-docker.sh
+D=scripts/lib/with-docker.sh
 k() { kubectl --context "$CTX" "$@"; }
 # Ingress(Traefik) 경유. /etc/hosts 없이 --resolve 사용
 lurl() { curl -s --max-time 15 --resolve "$HOST:80:127.0.0.1" "$@"; }

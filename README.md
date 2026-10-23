@@ -124,7 +124,7 @@ flowchart LR
 | Collection | OpenTelemetry Collector contrib 0.163.1 | `receivers → processors → exporters` maps directly onto the OTel concepts |
 | Dashboards/UI | Grafana 13.2.4, provisioned from files only | Datasources and dashboards are never configured by hand |
 | IPFS | Kubo v0.43.1 | Failed runs are uploaded too (with `status.json`), so a link alone shows the result |
-| Images | Pinned in `images.txt` (no `:latest`), prefetched with retry | Reproducible builds; `scripts/check-images.sh` checks that manifests, Dockerfiles and the Makefile agree with it |
+| Images | Pinned in `k8s/images.txt` (no `:latest`), prefetched with retry | Reproducible builds; `scripts/images/check-images.sh` checks that manifests, Dockerfiles and the Makefile agree with it |
 | Log path | OTLP (carries `trace_id` / `span_id`) plus JSON on stdout | Correlation in Grafana, and `kubectl logs` for debugging |
 | Trace dashboard data | App histogram + exemplars for the time series; Tempo only for Longest/Slowest | Cheap, and exemplars give the metric → trace jump |
 
@@ -168,7 +168,7 @@ A pattern list is not a complete defence, and this was checked rather than assum
 
 ### NetworkPolicy control experiments
 
-A policy that "seems" to work proves little, so the verify scripts use a control group: connect from a pod that should be blocked (fails), temporarily delete the policy and connect again (**succeeds**, proving the block was the policy and not something else), restore the policy and connect again (fails). This is done for the compiler pod (`scripts/verify/m2-02.sh`) and the Kubo API (`scripts/verify/m3-01.sh`). The backend's reaction to a blocked Kubo API is checked in `scripts/verify/m3-02.sh`.
+A policy that "seems" to work proves little, so the verify scripts use a control group: connect from a pod that should be blocked (fails), temporarily delete the policy and connect again (**succeeds**, proving the block was the policy and not something else), restore the policy and connect again (fails). This is done for the compiler pod (`scripts/verify/m2-02-compiler-hardening.sh`) and the Kubo API (`scripts/verify/m3-01-kubo-node.sh`). The backend's reaction to a blocked Kubo API is checked in `scripts/verify/m3-02-ipfs-upload.sh`.
 
 ## Observability
 
@@ -253,7 +253,7 @@ To show a working public fetch in a defence you need a network where the router 
 
 Iterating after a code change: `make build deploy` is enough; `make clean && make` is only for a from-scratch check.
 
-**Rolling restarts.** Right after a rollout, requests used to hang for exactly 30 s and end in a `504`: Traefik was slow to drop the old pod's endpoint, so it kept sending requests to a terminating pod whose SYN packets were discarded. The backend and frontend pods now have a 10 s `preStop` sleep (and the backend a longer termination grace period and shutdown limit), so the old pod keeps serving until Traefik has caught up. `scripts/verify/m6-04.sh` restarts each deployment while sending requests and requires zero non-200 responses; it passed twice after the fix. The upper bound of Traefik's delay was not measured (10 s is a margin), and replicas above 1 or a heavily loaded node were not tested.
+**Rolling restarts.** Right after a rollout, requests used to hang for exactly 30 s and end in a `504`: Traefik was slow to drop the old pod's endpoint, so it kept sending requests to a terminating pod whose SYN packets were discarded. The backend and frontend pods now have a 10 s `preStop` sleep (and the backend a longer termination grace period and shutdown limit), so the old pod keeps serving until Traefik has caught up. `scripts/verify/m6-04-stability.sh` restarts each deployment while sending requests and requires zero non-200 responses; it passed twice after the fix. The upper bound of Traefik's delay was not measured (10 s is a margin), and replicas above 1 or a heavily loaded node were not tested.
 
 ## Known limitations
 
@@ -261,7 +261,7 @@ Iterating after a code change: `make build deploy` is enough; `make clean && mak
 - **A new cluster shows `NaN` / empty p95 panels at first:** `rate()` needs at least two samples per histogram series, so the panels fill in after a second batch of requests (about 20 seconds later).
 - **Longest duration panel lags** by roughly 50 seconds (TraceQL metrics, one measurement).
 - **Full `make verify` on a fresh VM:** not yet confirmed as one run; it is planned for F-M6-02. The checks have so far been run per feature.
-- First `make` needs internet access to pull images and packages; image pulls are retried (`scripts/prefetch-images.sh`).
+- First `make` needs internet access to pull images and packages; image pulls are retried (`scripts/images/prefetch-images.sh`).
 
 ## Resources
 
@@ -278,17 +278,17 @@ Iterating after a code change: `make build deploy` is enough; `make clean && mak
 
 ### Use of AI
 
-Facts below come from the git history, `HANDOFF.md` and `CLAUDE.md`, except the items marked as provided by the author.
+Facts below come from the git history, `docs/HANDOFF.md` and `CLAUDE.md`, except the items marked as provided by the author.
 
 **Claude Code (CLI), model Claude Sonnet 5.5 — used for implementation work, one feature per branch.**
 
 - Counted with `git log` on `origin/main` at commit `4d34bde`: 93 non-merge commits, 89 of them carry the trailer `Co-Authored-By: Claude Sonnet 5.5`; the other 4 are `d86043d` (first commit) and three `CLAUDE.md` rule updates (`53f6530`, `c99fa3a`, `5fb2d0c`). There are also 21 merge commits. The trailer is not disabled, so `git log` shows which commits were AI co-authored.
 - *Code:* backend (API, queue and limits, Wasmtime execution, compiler service, deny-list, IPFS upload, OpenTelemetry instrumentation), frontend (Monaco shell, result display), Kubernetes manifests, Dockerfiles, `Makefile` and helper scripts, Grafana dashboards.
 - *Verification scripts:* the `scripts/verify/*.sh` checks, each committed in a failing state before the implementation, plus unit tests.
-- *Research:* looking up current versions, defaults and APIs from official documentation and real command output (for example the Tempo 3 TraceQL metrics behaviour, wasmtime-go's stdout API, UTM port-forwarding documentation) and recording the findings in `HANDOFF.md`.
-- *Documentation:* `HANDOFF.md` feature blocks with verification tables, and this README.
+- *Research:* looking up current versions, defaults and APIs from official documentation and real command output (for example the Tempo 3 TraceQL metrics behaviour, wasmtime-go's stdout API, UTM port-forwarding documentation) and recording the findings in `docs/HANDOFF.md`.
+- *Documentation:* `docs/HANDOFF.md` feature blocks with verification tables, and this README.
 - *Working rules* (`CLAUDE.md`): plan first and implement after approval; a failing check first; only commands that were actually run and their output count as "verified"; no results from the macOS development host count as verification, only the Debian VM.
 
 **Claude (claude.ai, chat) — used as a technical reviewer and decision partner**: drafting the PRD, writing a kickoff prompt for each feature, reviewing Claude Code's plans and results before approval or merge, and comparing technical options. All technical decisions and approvals were made by the author. *(Provided by the author; not verifiable from git.)*
 
-**What the author did** *(provided by the author; only the manual checks recorded in `HANDOFF.md` can be traced in the repository)*. The author made all technical decisions and approvals: the stack (Rust compiled to WASM, Go + wasmtime-go, k3d, LGTM stack with an OpenTelemetry Collector), the security limits and the compiler isolation model, and every scope change recorded as "PRD change" in `HANDOFF.md`. The author approved or rejected each Claude Code plan before implementation, reviewed every result before merging, and decided the merge order between parallel features. The author ran the manual checks in the VM's Firefox (failure and limit scenarios in the playground, and the metric → exemplar → trace → logs → IPFS walkthrough), ran the IPFS reachability test on a campus network with UTM Bridged networking, and contacted the subject authors about the public gateway requirement.
+**What the author did** *(provided by the author; only the manual checks recorded in `docs/HANDOFF.md` can be traced in the repository)*. The author made all technical decisions and approvals: the stack (Rust compiled to WASM, Go + wasmtime-go, k3d, LGTM stack with an OpenTelemetry Collector), the security limits and the compiler isolation model, and every scope change recorded as "PRD change" in `docs/HANDOFF.md`. The author approved or rejected each Claude Code plan before implementation, reviewed every result before merging, and decided the merge order between parallel features. The author ran the manual checks in the VM's Firefox (failure and limit scenarios in the playground, and the metric → exemplar → trace → logs → IPFS walkthrough), ran the IPFS reachability test on a campus network with UTM Bridged networking, and contacted the subject authors about the public gateway requirement.

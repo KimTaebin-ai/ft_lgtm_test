@@ -61,8 +61,8 @@ poll_series() { # <selector> → 최대 60s 폴링, 마지막 결과 출력
 }
 
 # ---- 1. load.sh: 정상 ≥5, 느린 요청 ≥2, __fail_compile__ ≥2 ----
-[ -x scripts/load.sh ] && pass "scripts/load.sh 존재" || fail "scripts/load.sh 없음/실행권한 없음"
-LOAD_OUT="$(bash scripts/load.sh --ok 6 --slow 2 --fail 2 2>"$LOAD_ERR")"
+[ -x scripts/tools/load.sh ] && pass "scripts/tools/load.sh 존재" || fail "scripts/tools/load.sh 없음/실행권한 없음"
+LOAD_OUT="$(bash scripts/tools/load.sh --ok 6 --slow 2 --fail 2 2>"$LOAD_ERR")"
 load_rc=$?
 [ "$load_rc" = "0" ] && pass "load.sh 단발 모드 종료 0 ($(cat "$LOAD_ERR"))" || fail "load.sh 실패 rc=$load_rc ($(cat "$LOAD_ERR"))"
 cnt() { printf '%s\n' "$LOAD_OUT" | awk -v k="$1" -v s="$2" '$1==k && ($2==s || s=="*") {n++} END{print n+0}'; }

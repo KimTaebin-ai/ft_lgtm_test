@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # workload 이미지를 k3d 노드 containerd 로 import 한다 (INF-07, ctr 직접 import). 노드에 이미 있으면 skip. idempotent.
-# env: CLUSTER_NAME (Makefile 이 export), IMAGES_FILE(기본 images.txt). 클러스터가 없으면 skip (make images 단독 실행 대응).
+# env: CLUSTER_NAME (Makefile 이 export), IMAGES_FILE(기본 k8s/images.txt). 클러스터가 없으면 skip (make images 단독 실행 대응).
 set -euo pipefail
 
 : "${CLUSTER_NAME:?CLUSTER_NAME 필요}"
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-WITH_DOCKER=scripts/with-docker.sh
-IMAGES_FILE="${IMAGES_FILE:-images.txt}"
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+WITH_DOCKER=scripts/lib/with-docker.sh
+IMAGES_FILE="${IMAGES_FILE:-k8s/images.txt}"
 NODE="k3d-${CLUSTER_NAME}-server-0"
 
 if ! "$WITH_DOCKER" k3d cluster get "$CLUSTER_NAME" >/dev/null 2>&1; then

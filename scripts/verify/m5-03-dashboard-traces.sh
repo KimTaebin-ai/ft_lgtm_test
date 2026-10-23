@@ -287,7 +287,7 @@ keys="$(k -n observability get configmap grafana-dashboards -o json 2>/dev/null 
 case " $keys " in *" $(basename "$DASH_FILE") "*) pass "ConfigMap grafana-dashboards 에 $(basename "$DASH_FILE") 포함 (keys: $keys)" ;; *) fail "ConfigMap grafana-dashboards 키에 $(basename "$DASH_FILE") 없음 (keys: '$keys')" ;; esac
 
 # ---- 1. wait-dashboards.sh: dashboards/ 의 모든 uid 가 올라와 있다 ----
-bash scripts/wait-dashboards.sh 150 >"$TMP/wd.out" 2>&1 && pass "wait-dashboards.sh: dashboards/ 의 모든 uid 확인 후 exit 0" || fail "wait-dashboards.sh 실패: $(tail -3 "$TMP/wd.out")"
+bash scripts/wait/wait-dashboards.sh 150 >"$TMP/wd.out" 2>&1 && pass "wait-dashboards.sh: dashboards/ 의 모든 uid 확인 후 exit 0" || fail "wait-dashboards.sh 실패: $(tail -3 "$TMP/wd.out")"
 
 # ---- 2. 부하: success 5, compile_error 2, exit 3 1 (2회, 20초 간격 — 새 histogram series 의 rate() NaN 회피) ----
 mkreq ok 'fn main() { println!("hi"); }'

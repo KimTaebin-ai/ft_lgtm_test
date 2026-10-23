@@ -233,9 +233,9 @@ ex="$(mimir query_exemplars --data-urlencode 'query=lgtm_execution_duration_seco
 	pyj "len([e for r in d['data'] for x in r['exemplars'] for e in [x] if len(e['labels'].get('trace_id',''))==32])")"
 [ "${ex:-0}" -ge 1 ] 2>/dev/null && pass "exemplar 가 trace_id 를 반환 (${ex}건)" || fail "exemplar trace_id ${ex:-0}건"
 
-# ---- 6. 단위 테스트 (VM 에 Go 설치 없이 images.txt 의 golang 이미지로) ----
-GO_IMG="$(awk '$1=="build" && $2 ~ /^golang:/ {print $2; exit}' images.txt)"
-if [ -n "$GO_IMG" ] && "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 "$GO_IMG" go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
+# ---- 6. 단위 테스트 (VM 에 Go 설치 없이 k8s/images.txt 의 golang 이미지로) ----
+GO_IMG="$(awk '$1=="build" && $2 ~ /^golang:/ {print $2; exit}' k8s/images.txt)"
+if [ -n "$GO_IMG" ] && "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 "$GO_IMG" go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test ./internal/... ($GO_IMG)"
 else
 	fail "go test ./internal/... 실패 (이미지='$GO_IMG')"; tail -20 "$TMP/gotest.log" >&2

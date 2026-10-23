@@ -32,11 +32,11 @@ echo "INFO: k3d 기본 k3s / 고정 K3S_IMAGE: $(k3d version 2>/dev/null | sed -
 
 # 2. docker daemon + 래퍼
 systemctl is-active --quiet docker && pass "docker daemon active" || fail "docker daemon not active"
-scripts/with-docker.sh docker info >/dev/null 2>&1 && pass "래퍼 경유 docker info" || fail "래퍼 경유 docker info 실패"
+scripts/lib/with-docker.sh docker info >/dev/null 2>&1 && pass "래퍼 경유 docker info" || fail "래퍼 경유 docker info 실패"
 
 # 3. sg 경로 quoting
 for arg in "it's a b" 'a"b $x `y` \z' "'" ""; do
-	got="$(WITH_DOCKER_FORCE_SG=1 scripts/with-docker.sh printf '%s' "$arg" 2>&1)"
+	got="$(WITH_DOCKER_FORCE_SG=1 scripts/lib/with-docker.sh printf '%s' "$arg" 2>&1)"
 	if [ "$got" = "$arg" ]; then pass "FORCE_SG quoting: [$arg]"; else fail "FORCE_SG quoting: 기대 [$arg] / 실제 [$got]"; fi
 done
 
@@ -58,10 +58,7 @@ done
 for d in backend frontend k8s dashboards scripts/verify; do
 	[ -d "$d" ] && pass "dir $d" || fail "dir $d 없음"
 done
-for d in backend frontend k8s dashboards; do
-	if [ -e "$d/.gitkeep" ]; then pass "$d/.gitkeep"; else fail "$d/.gitkeep 없음"; fi
-done
-for f in .gitignore HANDOFF.md Makefile; do
+for f in .gitignore docs/HANDOFF.md Makefile; do
 	[ -f "$f" ] && pass "file $f" || fail "file $f 없음"
 done
 

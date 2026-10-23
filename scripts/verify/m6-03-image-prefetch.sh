@@ -18,7 +18,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 info() { printf 'INFO: %s\n' "$1"; }
 var() { make --no-print-directory -s "print-$1" 2>/dev/null; }
 
-D="$ROOT/scripts/with-docker.sh"
+D="$ROOT/scripts/lib/with-docker.sh"
 CLUSTER_NAME="$(var CLUSTER_NAME)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 NODE="k3d-${CLUSTER_NAME:-lgtm}-server-0"
@@ -26,23 +26,23 @@ k() { kubectl --context "$CTX" "$@"; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-# images_of <role|all> : images.txt 에서 이미지 이름만
+# images_of <role|all> : k8s/images.txt 에서 이미지 이름만
 images_of() {
-	awk -v r="$1" '!/^[[:space:]]*(#|$)/ && (r == "all" || $1 == r) {print $2}' "$ROOT/images.txt"
+	awk -v r="$1" '!/^[[:space:]]*(#|$)/ && (r == "all" || $1 == r) {print $2}' "$ROOT/k8s/images.txt"
 }
 
 # ---- 1. 목록 파일과 docker host ----
-if [ ! -f "$ROOT/images.txt" ]; then
-	fail "images.txt 없음"
-	echo "FAIL: images.txt 가 없어 이후 검사를 할 수 없습니다" >&2
+if [ ! -f "$ROOT/k8s/images.txt" ]; then
+	fail "k8s/images.txt 없음"
+	echo "FAIL: k8s/images.txt 가 없어 이후 검사를 할 수 없습니다" >&2
 	exit 1
 fi
 n_all="$(images_of all | wc -l)"
-[ "$n_all" -gt 0 ] && pass "images.txt 항목 ${n_all}개" || fail "images.txt 가 비어 있음"
+[ "$n_all" -gt 0 ] && pass "k8s/images.txt 항목 ${n_all}개" || fail "k8s/images.txt 가 비어 있음"
 for r in workload build infra; do
-	[ "$(images_of "$r" | wc -l)" -gt 0 ] && pass "images.txt role=$r 있음" || fail "images.txt 에 role=$r 항목 없음"
+	[ "$(images_of "$r" | wc -l)" -gt 0 ] && pass "k8s/images.txt role=$r 있음" || fail "k8s/images.txt 에 role=$r 항목 없음"
 done
-images_of all | grep -qE ':latest$' && fail "images.txt 에 :latest 태그가 있음" || pass "images.txt 에 :latest 없음"
+images_of all | grep -qE ':latest$' && fail "k8s/images.txt 에 :latest 태그가 있음" || pass "k8s/images.txt 에 :latest 없음"
 
 missing=""
 while read -r img; do
@@ -64,7 +64,7 @@ else
 fi
 
 # ---- 3. 목록 / manifest 불일치 0 ----
-if out="$(bash "$ROOT/scripts/check-images.sh" 2>&1)"; then
+if out="$(bash "$ROOT/scripts/images/check-images.sh" 2>&1)"; then
 	pass "check-images.sh 불일치 0"
 else
 	fail "check-images.sh 실패: $(printf '%s' "$out" | head -5 | tr '\n' ' ')"
@@ -110,7 +110,7 @@ chmod +x "$FAKE"
 printf 'workload example.invalid/fake/img:1.0\n' >"$TMP/images.txt"
 export IMAGES_FILE="$TMP/images.txt" PREFETCH_DOCKER="$FAKE" PREFETCH_SLEEP=true FAKE_COUNT="$TMP/count"
 
-run_pf() { bash "$ROOT/scripts/prefetch-images.sh" workload >"$TMP/out" 2>"$TMP/err"; }
+run_pf() { bash "$ROOT/scripts/images/prefetch-images.sh" workload >"$TMP/out" 2>"$TMP/err"; }
 
 echo 0 >"$FAKE_COUNT"
 FAKE_OK_AT=3 PREFETCH_RETRIES=5 run_pf; rc=$?

@@ -20,8 +20,6 @@ CLUSTER_NAME="$(var CLUSTER_NAME)"
 K3S_IMAGE="$(var K3S_IMAGE)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 NODE="k3d-${CLUSTER_NAME:-lgtm}-server-0"
-# 우리가 만든 namespace만 검사한다. kube-system의 svclb/coredns 등 k3s가 띄우는 pod는 제어할 수 없다.
-OUR_NS="dummy"
 HOSTS="lgtm.local grafana.lgtm.local ipfs.lgtm.local"
 k() { kubectl --context "$CTX" "$@"; }
 
@@ -36,7 +34,7 @@ got="$(k get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}' 2>/d
 if [ -n "$got" ] && [ "$got" = "$want" ]; then pass "노드 VERSION $got"; else fail "노드 VERSION: 기대 '$want' / 실제 '${got:-없음}'"; fi
 
 # 2. 4001 tcp/udp 매핑 존재 (매핑 존재까지만. 외부 도달은 F-M3-01)
-ports="$(scripts/with-docker.sh docker port "$NODE" 2>&1)"
+ports="$(scripts/lib/with-docker.sh docker port "$NODE" 2>&1)"
 for p in 4001/tcp 4001/udp; do
 	if printf '%s\n' "$ports" | grep -q "^$p -> "; then pass "docker port $NODE $p"; else fail "docker port $NODE 에 $p 없음: $ports"; fi
 done
@@ -73,13 +71,6 @@ if [ "$b" -eq 1 ] && [ "$e" -eq 1 ]; then pass "/etc/hosts 블록 1개"; else fa
 
 # 7. traefik IngressClass
 k get ingressclass traefik >/dev/null 2>&1 && pass "IngressClass traefik" || fail "IngressClass traefik 없음"
-
-# 8. 우리 namespace의 모든 컨테이너에 resources request/limit
-res="$(k -n "$OUR_NS" get pods -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.name}{"|"}{.resources.requests.cpu}{"|"}{.resources.requests.memory}{"|"}{.resources.limits.cpu}{"|"}{.resources.limits.memory}{"\n"}{end}{end}' 2>&1)"
-n="$(printf '%s\n' "$res" | grep -c .)"
-bad="$(printf '%s\n' "$res" | grep . | awk -F'|' 'NF != 5 || $2=="" || $3=="" || $4=="" || $5==""')"
-if [ "$n" -ge 3 ] && [ -z "$bad" ]; then pass "namespace $OUR_NS 컨테이너 $n개 모두 resources request/limit 지정"
-else fail "namespace $OUR_NS resources 누락 또는 pod 부족 (컨테이너 $n개): $bad"; fi
 
 if [ "$fails" -ne 0 ]; then echo "RESULT: $fails 건 실패" >&2; exit 1; fi
 echo "RESULT: 모두 통과"

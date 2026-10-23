@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# images.txt 의 외부 이미지를 docker host 로 재시도하며 pull 한다 (INF-03/07). idempotent.
+# k8s/images.txt 의 외부 이미지를 docker host 로 재시도하며 pull 한다 (INF-03/07). idempotent.
 # usage: prefetch-images.sh [role...]   (role = workload|build|infra, 기본 전체)
-# env:   IMAGES_FILE(기본 images.txt), PREFETCH_RETRIES(5), PREFETCH_BACKOFF(첫 대기 초, 5; 매번 2배),
-#        PREFETCH_TIMEOUT(시도당 초, 300), PREFETCH_DOCKER(docker 명령, 기본 scripts/with-docker.sh docker),
+# env:   IMAGES_FILE(기본 k8s/images.txt), PREFETCH_RETRIES(5), PREFETCH_BACKOFF(첫 대기 초, 5; 매번 2배),
+#        PREFETCH_TIMEOUT(시도당 초, 300), PREFETCH_DOCKER(docker 명령, 기본 scripts/lib/with-docker.sh docker),
 #        PREFETCH_SLEEP(대기 명령, 기본 sleep. 테스트에서 true)
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-IMAGES_FILE="${IMAGES_FILE:-images.txt}"
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+IMAGES_FILE="${IMAGES_FILE:-k8s/images.txt}"
 RETRIES="${PREFETCH_RETRIES:-5}"
 BACKOFF="${PREFETCH_BACKOFF:-5}"
 TIMEOUT="${PREFETCH_TIMEOUT:-300}"
 SLEEP="${PREFETCH_SLEEP:-sleep}"
-read -r -a DOCKER <<<"${PREFETCH_DOCKER:-scripts/with-docker.sh docker}"
+read -r -a DOCKER <<<"${PREFETCH_DOCKER:-scripts/lib/with-docker.sh docker}"
 
 roles=("$@")
 [ "${#roles[@]}" -gt 0 ] || roles=(workload build infra)

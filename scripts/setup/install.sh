@@ -87,9 +87,9 @@ install_docker() {
 
 	if ! user_in_docker_group; then
 		$SUDO usermod -aG docker "$TARGET_USER"
-		echo "[info] $TARGET_USER 를 docker 그룹에 추가함 (이 make 안에서는 scripts/with-docker.sh 가 sg 로 처리)"
+		echo "[info] $TARGET_USER 를 docker 그룹에 추가함 (이 make 안에서는 scripts/lib/with-docker.sh 가 sg 로 처리)"
 	fi
-	"$(dirname "${BASH_SOURCE[0]}")/with-docker.sh" docker info >/dev/null \
+	"$(dirname "${BASH_SOURCE[0]}")/../lib/with-docker.sh" docker info >/dev/null \
 		|| die "docker 그룹 권한으로 docker info 실패"
 	cleanup; TMP=""
 }

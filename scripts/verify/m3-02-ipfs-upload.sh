@@ -47,7 +47,7 @@ PF_LOG_DIR="$TMP"
 BLOCKED=0
 STOPPED_PID=""
 NODE="k3d-${CLUSTER_NAME:-lgtm}-server-0"
-dk() { "$ROOT/scripts/with-docker.sh" docker "$@"; }
+dk() { "$ROOT/scripts/lib/with-docker.sh" docker "$@"; }
 ORIG_NP="$TMP/kubo-ingress.orig.json"
 PROBE=probe-backend-m302
 
@@ -377,7 +377,7 @@ CONST="$(sed -n 's/.*rustcVersion *= *"\([0-9.]*\)".*/\1/p' backend/internal/exe
 [ -n "$CONST" ] && [ "$CONST" = "$RUSTC_TAG" ] && pass "rustcVersion 상수($CONST) == Dockerfile.compiler 태그($RUSTC_TAG)" || fail "rustcVersion 상수='$CONST' vs Dockerfile.compiler='$RUSTC_TAG'"
 
 # ---- 10. 단위 테스트 (VM 에 Go 설치 없이 golang 이미지로 실행; cgo: 이미지에 gcc 포함) ----
-if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
+if "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
 	golang:1.27.3-trixie go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test ./internal/... 통과 (VM 의 docker golang:1.27.3-trixie 이미지)"
 else

@@ -4,8 +4,8 @@
 set -euo pipefail
 
 : "${CLUSTER_NAME:?CLUSTER_NAME 필요}" "${K3S_IMAGE:?K3S_IMAGE 필요}"
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-WITH_DOCKER=scripts/with-docker.sh
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+WITH_DOCKER=scripts/lib/with-docker.sh
 CTX="k3d-${CLUSTER_NAME}"
 TRAEFIK_POLL_TIMEOUT=180
 

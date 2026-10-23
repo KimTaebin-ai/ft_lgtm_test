@@ -20,7 +20,7 @@ var() { make --no-print-directory -s "print-$1" 2>/dev/null; }
 CLUSTER_NAME="$(var CLUSTER_NAME)"
 CTX="k3d-${CLUSTER_NAME:-lgtm}"
 HOST="lgtm.local"
-D=scripts/with-docker.sh
+D=scripts/lib/with-docker.sh
 k() { kubectl --context "$CTX" "$@"; }
 lurl() { curl -s --max-time 15 --resolve "$HOST:80:127.0.0.1" "$@"; }
 

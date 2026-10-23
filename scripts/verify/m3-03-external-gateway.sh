@@ -51,8 +51,8 @@ else
 fi
 
 # ---- 4. 진단 결과가 HANDOFF 에 기록됨 ----
-grep -q '^## F-M3-03 ' HANDOFF.md && pass "HANDOFF F-M3-03 블록" || fail "HANDOFF.md 에 '## F-M3-03 ' 블록 없음"
-awk '/^## F-M3-03 /{f=1;next} /^## /{f=0} f' HANDOFF.md | grep -q 'first_blocked=' && pass "HANDOFF 에 진단 결과(first_blocked=) 기록" || fail "HANDOFF F-M3-03 블록에 first_blocked= 기록 없음"
+grep -q '^## F-M3-03 ' docs/HANDOFF.md && pass "HANDOFF F-M3-03 블록" || fail "docs/HANDOFF.md 에 '## F-M3-03 ' 블록 없음"
+awk '/^## F-M3-03 /{f=1;next} /^## /{f=0} f' docs/HANDOFF.md | grep -q 'first_blocked=' && pass "HANDOFF 에 진단 결과(first_blocked=) 기록" || fail "HANDOFF F-M3-03 블록에 first_blocked= 기록 없음"
 
 if [ "$fails" -eq 0 ]; then
 	echo "m3-03: ALL PASS"

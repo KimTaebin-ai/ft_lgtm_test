@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # backend / compiler 이미지 빌드 + k3d image import (INF-07). idempotent.
-# env: CLUSTER_NAME, BACKEND_IMAGE, COMPILER_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/image-tag.sh).
+# env: CLUSTER_NAME, BACKEND_IMAGE, COMPILER_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/build/image-tag.sh).
 set -euo pipefail
 
 : "${CLUSTER_NAME:?CLUSTER_NAME 필요}" "${BACKEND_IMAGE:?BACKEND_IMAGE 필요}" "${COMPILER_IMAGE:?COMPILER_IMAGE 필요}"
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-WITH_DOCKER=scripts/with-docker.sh
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+WITH_DOCKER=scripts/lib/with-docker.sh
 
 # build_image <이미지(repo:tag)> <Dockerfile>  (컨텍스트는 항상 backend/)
 build_image() {

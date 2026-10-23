@@ -5,7 +5,7 @@
 #  - 고정 uid 의 provisioned dashboard 가 있고, 모든 패널 쿼리가 /api/ds/query 로 실행되어 값이 있다
 #  - 필수 3개(성공/실패/전체)는 increase(...[$__range]) 이고 성공+실패=전체, backend 를 재시작해도 값이 줄지 않는다
 #  - refresh 5s, duration 패널 exemplar, UI 에서 수정/삭제할 수 없고 Grafana pod 를 지워도 파일 기준으로 복원된다
-#  - scripts/wait-dashboards.sh 가 빠진 uid 를 출력하고 exit 1 로 끝난다
+#  - scripts/wait/wait-dashboards.sh 가 빠진 uid 를 출력하고 exit 1 로 끝난다
 # 재시작한 backend/grafana 는 끝나기 전에 Ready 와 dashboard 조회를 다시 확인한다 (이어서 m1-02 가 돈다).
 set -u
 
@@ -242,10 +242,10 @@ keys="$(k -n observability get configmap grafana-dashboards -o json 2>/dev/null 
 case " $keys " in *" $(basename "$DASH_FILE") "*) pass "ConfigMap grafana-dashboards 에 $(basename "$DASH_FILE") 포함 (keys: $keys)" ;; *) fail "ConfigMap grafana-dashboards 키에 $(basename "$DASH_FILE") 없음 (keys: '$keys')" ;; esac
 
 # ---- 1. wait-dashboards.sh: 정상 종료, 빠진 uid 는 출력하고 exit 1 ----
-bash scripts/wait-dashboards.sh 150 >"$TMP/wd.out" 2>&1 && pass "wait-dashboards.sh: dashboards/ 의 모든 uid 확인 후 exit 0" || { fail "wait-dashboards.sh 실패: $(tail -3 "$TMP/wd.out")"; }
+bash scripts/wait/wait-dashboards.sh 150 >"$TMP/wd.out" 2>&1 && pass "wait-dashboards.sh: dashboards/ 의 모든 uid 확인 후 exit 0" || { fail "wait-dashboards.sh 실패: $(tail -3 "$TMP/wd.out")"; }
 mkdir -p "$TMP/fakedash"
 printf '{"uid":"no-such-uid-m5-02","title":"x","panels":[]}\n' >"$TMP/fakedash/x.json"
-bash scripts/wait-dashboards.sh 6 "$TMP/fakedash" >"$TMP/wd2.out" 2>&1
+bash scripts/wait/wait-dashboards.sh 6 "$TMP/fakedash" >"$TMP/wd2.out" 2>&1
 rc=$?
 if [ "$rc" = 1 ] && grep -q "no-such-uid-m5-02" "$TMP/wd2.out"; then pass "wait-dashboards.sh: 없는 uid 는 이름을 출력하고 exit 1 (rc=$rc)"; else fail "wait-dashboards.sh 없는 uid 처리 rc=$rc out=$(tail -3 "$TMP/wd2.out")"; fi
 
@@ -274,7 +274,7 @@ relay < <(gpy check 2>"$TMP/check.err")
 read -r B1 B2 B3 <<<"$(gpy vals)"
 info "재시작 전 성공/실패/전체 = $B1 / $B2 / $B3"
 k -n lgtm rollout restart deploy/backend >/dev/null 2>&1
-k -n lgtm rollout status deploy/backend --timeout=180s >/dev/null 2>&1 && bash scripts/wait-backend.sh 60 >/dev/null 2>&1 && pass "backend 재시작 후 Ready, ingress 연결" || fail "backend 재시작 후 Ready/ingress 확인 실패"
+k -n lgtm rollout status deploy/backend --timeout=180s >/dev/null 2>&1 && bash scripts/wait/wait-backend.sh 60 >/dev/null 2>&1 && pass "backend 재시작 후 Ready, ingress 연결" || fail "backend 재시작 후 Ready/ingress 확인 실패"
 bad=0
 for i in 1 2 3; do
 	c="$(send ok)"
@@ -309,16 +309,16 @@ PY
 T0="$(gpy title)"
 relay < <(gpy edit)
 k -n observability delete pod -l app=grafana --wait=true >/dev/null 2>&1
-k -n observability rollout status deploy/grafana --timeout=180s >/dev/null 2>&1 && bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health >/dev/null 2>&1 && pass "Grafana pod 삭제 후 Ready, ingress 연결" || fail "Grafana pod 삭제 후 Ready/ingress 확인 실패"
+k -n observability rollout status deploy/grafana --timeout=180s >/dev/null 2>&1 && bash scripts/wait/wait-ingress.sh 60 grafana.lgtm.local/api/health >/dev/null 2>&1 && pass "Grafana pod 삭제 후 Ready, ingress 연결" || fail "Grafana pod 삭제 후 Ready/ingress 확인 실패"
 T1=""
 for i in $(seq 1 30); do T1="$(gpy title)"; [ -n "$T1" ] && break; sleep 5; done
 [ -n "$T1" ] && [ "$T1" = "$T0" ] && pass "Grafana pod 삭제 후 dashboard 가 같은 title·패널 수로 복원 ($T1)" || fail "Grafana pod 삭제 후 dashboard 복원 불일치 (전 '$T0' / 후 '$T1')"
 
 # ---- 6. 재시작한 구성요소 복구 확인 (이어서 m1-02 가 돈다) ----
 k -n lgtm rollout status deploy/backend --timeout=120s >/dev/null 2>&1 && pass "종료 전 backend Ready" || fail "종료 전 backend Ready 아님"
-bash scripts/wait-backend.sh 60 >/dev/null 2>&1 && pass "종료 전 backend ingress 연결" || fail "종료 전 backend ingress 연결 안 됨"
+bash scripts/wait/wait-backend.sh 60 >/dev/null 2>&1 && pass "종료 전 backend ingress 연결" || fail "종료 전 backend ingress 연결 안 됨"
 k -n observability rollout status deploy/grafana --timeout=120s >/dev/null 2>&1 && pass "종료 전 grafana Ready" || fail "종료 전 grafana Ready 아님"
-bash scripts/wait-dashboards.sh 150 >"$TMP/wd3.out" 2>&1 && pass "종료 전 dashboard uid 다시 조회됨" || fail "종료 전 dashboard uid 조회 실패: $(tail -2 "$TMP/wd3.out")"
+bash scripts/wait/wait-dashboards.sh 150 >"$TMP/wd3.out" 2>&1 && pass "종료 전 dashboard uid 다시 조회됨" || fail "종료 전 dashboard uid 조회 실패: $(tail -2 "$TMP/wd3.out")"
 
 if [ "$fails" -eq 0 ]; then echo "ALL PASS (m5-02)"; exit 0; fi
 echo "FAILED: ${fails}건 (m5-02)" >&2

@@ -62,7 +62,7 @@ spec:
   ports:
     - {name: http, port: 80, targetPort: http}
 ---
-# /healthz 는 노출하지 않는다. lgtm.local 의 / 는 dummy(k8s/dummy) 그대로 (F-M4-01에서 교체).
+# /healthz 는 노출하지 않는다. lgtm.local 의 / 는 frontend (k8s/app/frontend.yaml).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

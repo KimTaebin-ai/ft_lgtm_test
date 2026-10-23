@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # frontend 이미지 빌드 + k3d image import (INF-07). idempotent.
-# env: CLUSTER_NAME, FRONTEND_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/image-tag.sh).
+# env: CLUSTER_NAME, FRONTEND_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/build/image-tag.sh).
 set -euo pipefail
 
 : "${CLUSTER_NAME:?CLUSTER_NAME 필요}" "${FRONTEND_IMAGE:?FRONTEND_IMAGE 필요}"
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-WITH_DOCKER=scripts/with-docker.sh
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+WITH_DOCKER=scripts/lib/with-docker.sh
 
 if "$WITH_DOCKER" docker image inspect "$FRONTEND_IMAGE" >/dev/null 2>&1; then
 	echo "[skip] 이미지 $FRONTEND_IMAGE (이미 있음)"

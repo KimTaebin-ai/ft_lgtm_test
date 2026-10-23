@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # F-M3-03 make ipfs-check: "우리 노드가 올린 CID 를 public gateway 에서 열 수 있나" 진단.
 # 네트워크 상태에 의존하므로 make all 에 넣지 않는다. public 쪽 실패는 결과일 뿐 exit 0 (kubo 를 못 쓰면 exit 1).
-# 출력 형식: [ipfs-check] S<n> PASS|FAIL|INFO|SKIP <내용> / GATEWAY / CID / SUMMARY (scripts/verify/m3-03.sh 가 검사)
+# 출력 형식: [ipfs-check] S<n> PASS|FAIL|INFO|SKIP <내용> / GATEWAY / CID / SUMMARY (scripts/verify/m3-03-external-gateway.sh 가 검사)
 # 근거: Kubo RPC https://docs.ipfs.tech/reference/kubo/rpc/ (swarm/addrs/autonat, provide/once),
 #       delegated routing https://specs.ipfs.tech/routing/http-routing-v1/, ipfs-check https://github.com/ipfs/ipfs-check
 set -u
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
 CLUSTER_NAME="${CLUSTER_NAME:-lgtm}"
@@ -44,7 +44,7 @@ block() { [ -z "$blocked" ] && { blocked="$1"; reason="$2"; }; }
 s1=PASS; d1=""
 listen="$(kx ipfs swarm addrs listen 2>/dev/null)"
 echo "$listen" | grep -q '/tcp/4001' && echo "$listen" | grep -q '/udp/4001/quic-v1' && d1="kubo listen tcp+quic-v1 4001" || { s1=FAIL; d1="kubo 가 4001 tcp/quic listen 안 함"; }
-port="$(bash scripts/with-docker.sh docker port "$NODE" 4001 2>/dev/null | tr '\n' ' ')"
+port="$(bash scripts/lib/with-docker.sh docker port "$NODE" 4001 2>/dev/null | tr '\n' ' ')"
 case "$port" in *4001/tcp*|*0.0.0.0:4001*) d1="$d1; docker 매핑 ${port}" ;; *) s1=FAIL; d1="$d1; docker 4001 매핑 없음" ;; esac
 hdr="$(timeout 6 bash -c 'exec 3<>/dev/tcp/127.0.0.1/4001; printf "\023/multistream/1.0.0\n" >&3; head -c 20 <&3' 2>/dev/null | tr -d '\0-\037')"
 case "$hdr" in */multistream/1.0.0*) d1="$d1; 호스트 127.0.0.1:4001 multistream 응답" ;; *) s1=FAIL; d1="$d1; 호스트 4001 multistream 응답 없음" ;; esac

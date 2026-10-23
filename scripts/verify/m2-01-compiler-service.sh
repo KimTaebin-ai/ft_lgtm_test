@@ -232,7 +232,7 @@ set -- $PEAK
 
 # ---- 8. 15초 timeout / 프로세스 그룹 kill / semaphore: 단위 테스트로 대체 ----
 info "15s timeout 은 VM 에서 결정적 재현이 어려워 단위 테스트(느린 명령 주입)로 대체한다"
-if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local \
+if "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local \
 	golang:1.27.3-trixie go test -count=1 ./cmd/compiler/... ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test (timeout·그룹 kill·temp 삭제·semaphore·backend handler) 통과"
 else

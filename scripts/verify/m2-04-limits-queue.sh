@@ -357,7 +357,7 @@ el="$(elapsed "$T_LOAD_END" "$(now_s)")"
 [ "$a" = 0 ] && [ "$w" = 0 ] && num_between "$el" 0 15 && pass "부하 종료 후 ${el}s 안에 lgtm_queue_active=0, lgtm_queue_waiting=0" || fail "부하 종료 후 ${el}s: active='$a' waiting='$w' (기대 15초 안에 0, 0)"
 
 # ---- 10. 단위 테스트 (limiter, 413/429 핸들러; cgo: golang 이미지에 gcc 포함) ----
-if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
+if "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
 	golang:1.27.3-trixie go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test ./internal/... (limiter, 413/429 핸들러 포함) 통과"
 else

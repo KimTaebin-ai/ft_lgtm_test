@@ -3,5 +3,5 @@
 # usage: image-tag.sh <dir>   → 12자 hex 출력. 파일 경로 + 내용이 입력이며 mtime 은 무관.
 set -euo pipefail
 dir="${1:?usage: $0 <dir>}"
-cd "$(dirname "${BASH_SOURCE[0]}")/../$dir"
+cd "$(dirname "${BASH_SOURCE[0]}")/../../$dir"
 find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-12

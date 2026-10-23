@@ -259,7 +259,7 @@ attr_check mem - False False True True
 attr_check big 0 False True False False
 
 # ---- 14. 단위 테스트 (cgo: golang 이미지에 gcc 포함) ----
-if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
+if "$ROOT/scripts/lib/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
 	golang:1.27.3-trixie go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test ./internal/... (wasmtime 실행기 단위 테스트 포함) 통과"
 else
