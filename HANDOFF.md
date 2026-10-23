@@ -10,6 +10,54 @@
 ### 다음 단계
 -->
 
+## F-M5-02 dashboard-metrics (브랜치 feat/m5-02-dashboard-metrics)
+
+### 한 일
+- **provisioning 구조는 새로 만들지 않았다.** F-M1-02 에서 이미 있던 것을 그대로 쓴다: `k8s/observability/grafana.yaml` 의 dashboards provider(`lgtm`, `/var/lib/grafana/dashboards`, `updateIntervalSeconds: 30`, `allowUiUpdates: false`)와 `make deploy` 가 `dashboards/*.json` 으로 만드는 ConfigMap `grafana-dashboards`. datasource 설정은 변경하지 않았다.
+- `dashboards/lgtm-metrics.json`(신규): uid `lgtm-metrics`, title `LGTM Metrics`, `refresh: "5s"`, 기본 시간 범위 `now-1h`(제안), datasource 는 `{prometheus, uid: mimir}` 만 참조. 패널 9개:
+  - 필수 stat 3개: 성공/실패/전체 = `sum(increase(lgtm_executions_total{status="success"|status!="success"|없음}[$__range]))`
+  - 권장: 429 거절 수 stat, 실행 duration p95 timeseries(target `exemplar: true`), 단계별 p95(`sum by (le, stage)`, queue 포함), status별 비율 piechart, 큐 처리/대기 timeseries, output bytes 분포 heatmap
+- `scripts/wait-dashboards.sh`(신규) + `make deploy` 의 grafana 대기 바로 뒤 한 줄: `dashboards/*.json` 의 uid 마다 Grafana 에서 title·패널 쿼리가 파일과 같아질 때까지 최대 150초 폴링. **시간 안에 확인되지 않은 uid 를 출력하고 exit 1 → make 실패.** (kubelet 볼륨 sync + 30초 스캔 때문에 deploy 직후에는 dashboard 가 비어 있을 수 있어서)
+- `scripts/verify/m5-02.sh`(먼저 실패 상태로 커밋 b991837), `VERIFY_ALL` 끝에 추가. Grafana 는 Ingress 로 호출해서 port-forward 를 쓰지 않는다(포트 충돌 없음).
+
+### PRD 해석 / 차이
+- PRD 8.6 표의 성공/실패 쿼리는 raw `sum(lgtm_executions_total{...})` 이지만 같은 절의 주석("raw counter 는 재시작 때 0 으로 떨어진다. 성공/실패 패널도 같은 방식")과 요청에 따라 `increase(...[$__range])` 로 썼다.
+- **UI 수정은 저장되지 않는다**: `allowUiUpdates: false` 라서 `POST /api/dashboards/db`·`DELETE` 가 HTTP 400 으로 거부되고, PVC 가 없어 Grafana pod 를 지우면 파일 기준으로 복원된다(m5-02.sh 가 확인). "다른 이름으로 저장"한 복사본은 pod 가 다시 뜨면 사라진다.
+
+### F-M5-03 이 dashboard 를 추가하는 방법
+1. `dashboards/<이름>.json` 을 추가한다(uid 고정, datasource 는 `{type, uid}` 로 `mimir`/`tempo`/`loki` 고정, `${DS_*}` 입력 변수 쓰지 않기).
+2. `make deploy` — ConfigMap 이 `dashboards/*.json` 전체로 다시 만들어지고 `wait-dashboards.sh` 가 새 uid 가 올라올 때까지 기다린다. 코드 수정은 필요 없다.
+3. 주의: `dashboards/*.json` 합계가 ~120KB 를 넘으면 `kubectl apply` 의 last-applied annotation(256KB 한도)에 걸린다. m5-02.sh 가 이 합계를 검사한다. 넘으면 `--server-side` 로 바꿔야 한다.
+4. Tempo 패널은 datasource uid `tempo` 를 쓰고, `max_over_time(duration)` 은 Tempo `local-blocks`(metrics-generator) 설정이 먼저 필요하다(PRD 8.6, 현재 tempo.yaml 에 없음).
+
+### 검증표 (VM `lgtm-vm`, 로그 `~/lgtm-logs/m5-02-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 구현 전 m5-02.sh 가 실패 | `m5-02-red.log` | 확인(VM): 7 PASS / 6 FAIL (dashboard 파일·wait 스크립트·uid 없음) |
+| `/api/search` 에 고정 uid, `meta.provisioned=true`, refresh `5s` | `m5-02-final3.log` ALL PASS (45 PASS) | 확인(VM) |
+| 모든 패널(9개, target 10개)의 쿼리가 `/api/ds/query` 로 실행되어 값이 있음 | 같은 로그 | 확인(VM). 부하는 20초 간격 2회(아래 참고) |
+| 필수 3개 패널이 `stat` + `sum(increase(lgtm_executions_total...[$__range]))`, 성공 + 실패 = 전체(±0.01) | 같은 로그 | 확인(VM) |
+| duration 패널 응답에 exemplar `trace_id`(32자리 hex) | 같은 로그 | 확인(VM): `/api/ds/query` 응답의 `trace_id` 필드. **브라우저에서 점을 클릭해 trace 로 이동하는 것은 확인하지 않음** |
+| backend 재시작 후 필수 3개 값이 음수/0/감소 아님, 새 요청이 전체에 반영 | 같은 로그 | 확인(VM) |
+| API 로 저장·삭제 시도 → 400, Grafana pod 삭제 후 같은 title·패널 수로 복원 | 같은 로그 | 확인(VM) |
+| `wait-dashboards.sh`: 정상이면 exit 0, 없는 uid 는 이름을 출력하고 exit 1 | 같은 로그 | 확인(VM) |
+| m5-02.sh 끝에서 backend/grafana Ready, ingress 연결, dashboard uid 재조회 | 같은 로그 | 확인(VM) |
+| `make clean && make` 로 새 클러스터에서 dashboard 가 자동으로 올라옴 | `m5-02-clean-make2.log`: `CLEAN_MAKE_EXIT=0`, `dashboards ready: 1 file(s)` (2분 42초) | 확인(VM) |
+| `make clean && make` 직후 m1-02.sh | `m5-02-m1-02b.log`, m5-02 뒤 `m5-02-m1-02c.log` | 확인(VM): 둘 다 59 PASS, `RESULT: 모두 통과` |
+| 전체 `make verify` | 실행하지 않음 | 미실행 (CLAUDE.md: 이 피처 verify + 영향받는 m1-02 만. Makefile 변경이 있어 `make clean && make` 는 했다) |
+
+### 실행 중 만난 문제
+- **새 클러스터에서 단계별 p95 패널이 NaN(값 0개)**: 새 histogram series 는 첫 sample 만 있어 `rate()` 구간에 증가분이 없다. m5-02.sh 가 부하를 20초 간격으로 두 번 보내도록 고쳤다(운영 dashboard 쿼리는 그대로). 빈 패널은 첫 부하 직후 잠시 나타날 수 있다.
+- **간헐 실패 1회, 원인 미확인**: 새 클러스터 직후 첫 m5-02 실행에서 backend 재시작 직후 요청 3건 중 1건이 HTTP 200 이 아니었다(그래서 "새 요청이 전체에 반영"도 FAIL, 17.34 → 18.19). 응답 코드를 남기지 않아서 모른다. 코드·본문·pod·traefik 로그를 남기도록 고친 뒤 m5-02.sh 를 1회 다시 실행했고 통과했다(재현 안 됨). **가설(미확인)**: rollout 직후 Traefik 이 종료 중인 이전 pod 로 한 요청을 보냄. 재현을 반복하지 않았다. 다시 나오면 `INFO: 재시작 후 요청 N: HTTP ...` 줄과 traefik 로그를 보면 된다.
+- 첫 구현에서 `gpy ... | relay` 파이프가 subshell 이라 FAIL 카운트가 사라지는 버그가 있어 `relay < <(...)` 로 고쳤다(위 NaN 실패가 `FAILED` 로 집계되지 않던 문제).
+
+### 안 된 것
+- **스크린샷: 미확인, F-M5-03 수동 확인(VM Firefox) 때 함께 찍음.** (지시에 따라 브라우저 자동화와 ssh 터널은 시도하지 않았다.) 따라서 heatmap/piechart 가 실제로 보기 좋게 렌더되는지, `schemaVersion: 41` 이 Grafana 13.2.4 UI 에서 경고 없이 열리는지는 API 수준(쿼리 실행, provisioned 로드)까지만 확인했다.
+- exemplar 점 클릭 → Tempo trace 이동은 수동 확인 대상(F-M5-03).
+
+### 다음 단계
+- F-M5-03: Dashboard 2(Traces) — Tempo 패널, `local-blocks`, `tracesToMetrics`. 위 "추가하는 방법" 참고. 스크린샷과 exemplar 클릭 확인을 함께.
+
 ## F-M5-01 instrumentation (브랜치 feat/m5-01-instrumentation)
 
 ### 한 일

@@ -71,6 +71,7 @@ deploy:
 	done
 	@kubectl --context k3d-$(CLUSTER_NAME) -n dummy delete ingress,svc,deploy dummy-grafana dummy-lgtm dummy-ipfs --ignore-not-found
 	@bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health
+	@bash scripts/wait-dashboards.sh 150
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/00-namespace.yaml
 	@kubectl --context k3d-$(CLUSTER_NAME) apply -f k8s/ipfs/
 	@kubectl --context k3d-$(CLUSTER_NAME) -n ipfs rollout status statefulset/kubo --timeout=300s
@@ -95,7 +96,7 @@ status:
 
 # 전체 검증: 순차 실행, 첫 실패에서 중단. verify 스크립트는 서로를 호출하지 않는다 (port-forward 충돌 방지). VM(Linux)에서만 동작한다
 VERIFY_M1 = m1-01 m1-02 m1-03 m1-04
-VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m2-03 m2-04 m3-01 m3-02 m4-01 m4-02 m6-03 m3-03 m5-01
+VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m2-03 m2-04 m3-01 m3-02 m4-01 m4-02 m6-03 m3-03 m5-01 m5-02
 
 # $(call run_verify,<타겟 이름>,<스크립트 목록>)
 define run_verify
