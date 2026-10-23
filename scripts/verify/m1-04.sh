@@ -115,7 +115,7 @@ v="$(lab "$STG")"; [ "$v" = "['stage']" ] && pass "stage_duration label: $v" || 
 v="$(printf '%s %s %s' "$EXE" "$DUR" "$STG" | grep -o -i '"[a-z_]*\(cid\|hash\|sha\)[a-z0-9_]*"' | sort -u | tr '\n' ' ')"
 [ -z "$v" ] && pass "label 키에 cid/hash/sha 류 없음" || fail "high-cardinality 의심 label 키: $v"
 v="$(printf '%s' "$STG" | pyj "sorted(set(s['stage'] for s in d))")"
-[ "$v" = "['compile', 'execute', 'ipfs_upload']" ] && pass "stage 값: $v" || fail "stage 값='${v}'"
+[ "$v" = "['compile', 'execute', 'ipfs_upload', 'queue']" ] && pass "stage 값: $v (queue 는 F-M2-04 에서 PRD 8.2 에 추가)" || fail "stage 값='${v}'"
 
 # ---- 5. exemplar: Mimir query_exemplars ----
 EX_JSON=""; EX_IDS=""

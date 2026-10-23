@@ -72,9 +72,10 @@
 | 65KB body → 413, 0.01s, status=payload_too_large / 60KB 정상 → 200 / 깨진 JSON → 400 | m2-04.sh 1~4 | 확인(VM) |
 | 본문을 다 읽지 않음: backend 에 Content-Length 5000000 만 보내고 본문 0바이트 → 413 (0.00s), Ingress 경유 실제 5MB → 413 (0.03s) | m2-04.sh 2 | 확인(VM) |
 | 동시 20개(loop {}) → 429 정확히 10 / HTTP 200 정확히 10, 429 는 3초 안에 반환, 200 은 모두 status=timeout, 504 없음, 전체 26.99s | m2-04.sh 5 | 확인(VM) |
-| Mimir `lgtm_queue_rejected_total` increase = 10 (burst 의 429 10건) | m2-04.sh 6 | **raw 차이 기준 실행에서 확인(VM, run2). increase() 기준으로 바꾼 뒤는 미실행** |
-| Mimir `lgtm_executions_total` increase = **11**. 근거: 60KB 정상 요청 1건(success) + 20개 burst 중 처리된 10건(timeout) = 실행이 시작된 요청. 제외(기대값에 안 들어감): 65KB 413 1, 5MB 413 1(Ingress), 깨진 JSON 400 1, burst 의 429 10건. (Content-Length 만 보낸 backend 직접 요청은 헤더만 보내고 끊으므로 핸들러가 413 만 쓰고 메트릭 없음) | m2-04.sh 6 | raw 차이 기준 실행에서 확인(VM, run2). increase() 기준으로 바꾼 뒤는 미실행 |
-| 부하 종료 후 15초 안에 `lgtm_queue_active=0`, `lgtm_queue_waiting=0` (Mimir) | m2-04.sh 9 | **미실행** (추가만 함) |
+| Mimir `lgtm_queue_rejected_total` increase = 10 (burst 의 429 10건) | m2-04.sh 6 | 확인(VM, run3 및 `make verify`) |
+| Mimir `lgtm_executions_total` increase = **11**. 근거: 60KB 정상 요청 1건(success) + 20개 burst 중 처리된 10건(timeout) = 실행이 시작된 요청. 제외(기대값에 안 들어감): 65KB 413 1, 5MB 413 1(Ingress), 깨진 JSON 400 1, burst 의 429 10건. (Content-Length 만 보낸 backend 직접 요청은 헤더만 보내고 끊으므로 핸들러가 413 만 쓰고 메트릭 없음) | m2-04.sh 6 | 확인(VM, run3 및 `make verify`) |
+| 부하 종료 후 15초 안에 `lgtm_queue_active=0`, `lgtm_queue_waiting=0` (Mimir) | m2-04.sh 9 | 확인(VM, run3 2.09s) |
+| `make clean && make` exit 0, 재실행 exit 0, `make verify` exit 0 (m1-04 기대값 수정 후, 아래 최종 실행 참고) | `m2-04-final2.log`, `m2-04-final3.log` | 확인(VM) |
 | `stage="queue"` series 존재, count == `stage="compile"` count (대기 0 도 기록), bucket series 존재 | m2-04.sh 6 | 확인(VM) |
 | gauge `lgtm_queue_active`=2, `lgtm_queue_waiting`>0 관측, 종료 후 둘 다 0 | m2-04.sh 5, 6 | 확인(VM) |
 | 429 root span `queue.rejected=true`, 승인 요청 `queue.wait_ms` (Tempo) | m2-04.sh 7 | 확인(VM) |
@@ -85,15 +86,19 @@
 ### 메모리
 - 실측 (VM, backend 재시작 후 9MB 를 쥐고 5초 spin 하는 서로 다른 코드 20건 동시: 처리 10(2씩) + 429 10, `m2-04-memprobe.log`): idle 11MB, 실행 중 memory.current 43~63MB, **memory.peak 70MB**, 재시작 0, OOMKilled 아님
 - **결정: limit 512Mi 유지 (원래 값), request 64Mi.** 근거: 위 실측은 최악 케이스가 아니다 (처리 2건이 둘 다 10MiB 한도까지 쓰면서 큰 wasm 의 compile 응답이 겹치는 조합, 64KB body 10개 동시 버퍼는 측정하지 않았다). backend 가 OOMKill 되면 처리 2 + 대기 8 의 큐 전체가 사라진다. 256Mi 는 peak 의 3.8배였지만 최악을 못 재서 되돌렸다. 최악 케이스 실측은 안 된 것에 남긴다
-- 새 설정(64Mi/512Mi)으로 PR 직전 전체 검증은 아직 유효한 결과가 없다 (아래 '최종 실행')
+- 이 설정(64Mi/512Mi)으로 아래 '최종 실행'의 전체 검증을 통과했다
 
 ### 실행 순서 (정직하게)
 - m2-04.sh 첫 구현 실행(`m2-04-run1.log`) 4건 FAIL: (1) Content-Length 만 크고 본문 없는 요청을 Traefik 경유로 보내면 5초 timeout (Traefik 이 본문을 기다리는 것으로 보이나 원인 확인은 안 함) → 같은 검사를 backend 직접 + Ingress 경유 실제 5MB 로 분리, (2) `send_bg` 가 소요 시간을 안 남겨 429 속도 검사가 오검출 (스크립트 버그), (3)(4) executions 증가량 -48 (위 counter 리셋). 구현 코드는 (3) 때문에 0 초기화만 추가
 - 그 뒤 `make build deploy` → m2-04.sh 한 번에 ALL PASS (`m2-04-run2.log`)
 
-### 최종 실행 (PR 직전 `make clean && make` → `make` → `make verify`, `m2-04-final.log`) — 무효
-- `MAKE1_EXIT=0`, `MAKE2_EXIT=0`. 그러나 실행 도중 다른 세션(F-M3-03)이 같은 `~/lgtm` 에 `rsync --delete` 해서 VM 트리가 바뀌었다: 이후 `make verify` 가 **m2-04 를 건너뛰고**(VERIFY_ALL 에 m2-04 없음, `scripts/verify/m2-04.sh` 없음) m3-03 을 실행해 FAIL(`HANDOFF.md 에 '## F-M3-03 ' 블록 없음`, 그 세션의 파일). `VERIFY_EXIT=2`. 그 앞의 m1-03 ~ m6-03 은 ALL PASS 로 찍혔으나 m2-04 가 포함되지 않았고 backend 코드도 같은 트리 기준인지 보장할 수 없어 m2-04 의 최종 검증으로 치지 않는다
-- 해결: 사용자가 "VM 비었음"이라고 하면 lock(`ssh lgtm-vm 'mkdir ~/.lgtm-vm.lock'`, CLAUDE.md 에 규칙 추가)을 잡고, `rsync` 로 이 브랜치를 다시 올려 `make clean && make` → `make` → `make verify` 한 번 더. 이 세션이 `pgrep` 로 확인했을 때(시작 시)는 다른 작업이 없었으나 중간에 시작됨
+### 최종 실행 (PR 직전, VM lock 잡고 실행, 로그 `~/lgtm-logs/m2-04-*.log`)
+- 이전 시도(`m2-04-final.log`)는 다른 세션이 같은 `~/lgtm` 에 `rsync --delete` 해서 m2-04 가 빠진 채 실행돼 무효였다 (이후 `~/.lgtm-vm.lock` 규칙을 CLAUDE.md 에 추가)
+- `make build deploy` → `m2-04.sh` (increase() 기준, gauge 0 검사 포함) 한 번에 ALL PASS (`m2-04-run3.log`): rejected increase 10, executions increase 11, 부하 종료 후 2.09s 에 active=0 waiting=0
+- `make clean && make` `MAKE1_EXIT=0`, 재실행 `MAKE2_EXIT=0` (`m2-04-final2.log`). 이어진 `make verify` 는 **m1-04 에서 FAIL**: `stage 값=['compile','execute','ipfs_upload','queue']`. PRD 8.2 stage 에 queue 를 추가한 결과 m1-04 가 stage 값 집합을 3개로 고정하고 있었다 (사용자 승인 PRD 변경의 필연적 결과라 범위 밖이지만 `scripts/verify/m1-04.sh` 기대값에 `queue` 만 추가)
+- 그 뒤 `m1-04.sh` 단독 ALL PASS (`m2-04-m104.log`), 같은 클러스터에서 `make verify` 전체 `VERIFY_EXIT=0`, `verify: ALL PASS` (m1-01 ~ m2-04, m3-01, m4-01, m4-02, m6-03 `m2-04-final3.log`)
+- 즉 "`make clean && make` 직후 첫 `make verify` 가 한 번에 통과"한 것은 아니다. m1-04 기대값 수정 후의 `make verify` 이고 `make clean` 은 그 사이에 하지 않았다. backend 이미지는 수정 전후로 바뀌지 않았다 (verify 스크립트만 수정)
+- 이 실행에서 m3-03 은 이 브랜치의 VERIFY_ALL 에 없다 (다른 세션 브랜치)
 
 ### 안 된 것 / 열린 문제
 - 대기 상한 45초(wait_timeout)에 의한 429 는 단위 테스트(limiter, 50ms 로 축소)만 확인했고 VM 에서 실제 45초를 기다리는 검증은 하지 않았다
