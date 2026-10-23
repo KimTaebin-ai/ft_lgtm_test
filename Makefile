@@ -95,7 +95,7 @@ status:
 
 # 전체 검증: 순차 실행, 첫 실패에서 중단. verify 스크립트는 서로를 호출하지 않는다 (port-forward 충돌 방지). VM(Linux)에서만 동작한다
 VERIFY_M1 = m1-01 m1-02 m1-03 m1-04
-VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m2-03 m2-04 m3-01 m3-02 m4-01 m4-02 m6-03
+VERIFY_ALL = $(VERIFY_M1) m2-01 m2-02 m2-03 m2-04 m3-01 m3-02 m4-01 m4-02 m6-03 m3-03
 
 # $(call run_verify,<타겟 이름>,<스크립트 목록>)
 define run_verify
@@ -115,8 +115,9 @@ verify:
 verify-m1:
 	$(call run_verify,verify-m1,$(VERIFY_M1))
 
+# 네트워크 상태에 의존하므로 make all 에 넣지 않는다 (scripts/ipfs-check.sh, F-M3-03)
 ipfs-check:
-	@echo "TODO F-M3-03"
+	@bash scripts/ipfs-check.sh
 
 # /etc/hosts 는 건드리지 않는다 (fclean은 F-M6-02)
 clean:
