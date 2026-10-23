@@ -1,4 +1,4 @@
-*This project has been created as part of the 42 curriculum by 【login】.*
+*This project has been created as part of the 42 curriculum by taebkim.*
 
 # LGTM — Looks Good To Monitor
 
@@ -67,7 +67,7 @@ Not needed for the demo, and not covered by `make verify`. On the host, add the 
 <VM-IP> lgtm.local grafana.lgtm.local ipfs.lgtm.local
 ```
 
-With UTM's Shared network the VM IP is reachable from the Mac (the frontend dev proxy in `frontend/vite.config.ts` relies on that). If your VM is not reachable by IP, forward the VM's port 80 to the host and use the forwarded port. Public IPFS access additionally needs port 4001 (tcp and udp) forwarded, see [IPFS and NAT](#ipfs-and-nat).
+Verified: from the Mac, the VM's UTM Shared address (192.168.64.x) is reachable over ssh. Not verified: opening the sites in a host browser after editing the host's `/etc/hosts`. If the VM is not reachable by IP, forward the VM's port 80 to the host and use the forwarded port. Public IPFS access additionally needs port 4001 (tcp and udp) forwarded, see [IPFS and NAT](#ipfs-and-nat).
 
 ## Architecture
 
