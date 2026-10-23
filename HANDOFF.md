@@ -10,6 +10,54 @@
 ### 다음 단계
 -->
 
+## F-M5-01 instrumentation (브랜치 feat/m5-01-instrumentation)
+
+### 한 일
+- 현황 대조 결과 TR-01/03/04/05/06, 8.2 의 4개 metric, histogram bucket 은 M1~M3 에서 이미 PRD 와 같았다(다시 만들지 않음). 구현한 것은 아래뿐이다.
+- **분류형 메시지 (TR-02)**: `telemetry/failspan.go`(신규) `FailSpan(span, class)` — status description 과 `exception` event(attribute `exception.message` 하나, `exception.type`/stacktrace 없음) 를 같은 고정 문구로 기록, 512바이트(UTF-8 경계) 절단. 기존 `RecordError(err)`/`SetStatus(err.Error())` 는 모두 제거.
+  - compile_error: `rustc failed [E0425]`(stderr 첫 `error[Exxxx]` 의 코드만), deny-list `source denied [deny-env-macro]`, `compile timeout`. compiler 가 422 응답 헤더 `X-Lgtm-Class` 로 보내고 backend 는 정규식(`^(rustc failed|source denied)( \[[A-Za-z0-9-]{1,40}\])?$`)에 맞는 값만 쓴다(안 맞으면 `rustc failed`).
+  - runtime_error: `exit code N`, `wasm trap [unreachable]`(TrapCode 고정 이름표, `Trap.Message()`/backtrace 는 사용 안 함), timeout `time limit exceeded`, memory_limit `memory limit exceeded`, 그 외 `runtime error`
+  - 플랫폼 오류: `internal error [compile|execute]`, 업로드 `ipfs upload failed [timeout|http_5xx|http_4xx|connect|other]`(Kubo 응답 본문 제거, `ipfs.StatusError` 신설)
+- **로그에도 같은 원칙**: `step()` 의 `ErrorContext` 는 사용자 입력이 섞일 수 있는 오류(`userError`, `execFailure`)면 `class` 만 남기고, 플랫폼 오류(Kubo 응답, 연결 실패 등)는 `class` + `error` 를 유지한다.
+- **attribute**: rustc span `rustc.exit_code`(rustc 가 실제 종료한 경우만. 성공 0, 실패 N, deny/timeout 은 없음), `rustc.outcome`(`ok|compile_error|denied|timeout|canceled|internal`). 기존 `denylist.rule` 유지. root span `lgtm.status`(응답 status 9종: success/compile_error/internal_error/runtime_error/timeout/memory_limit/invalid_request/payload_too_large/queue_full). 값이 고정이라 cardinality 문제 없고, TraceQL 로 `{ name="POST /api/execute" && span.lgtm.status="timeout" }` 검색이 가능하다.
+- **metric**: `lgtm_output`(unit `By`, 접미사 없음) → Mimir 저장 이름 `lgtm_output_bytes_{bucket,sum,count}` 로 실측 확인. 값=stdout+stderr 바이트 합, 실행이 끝난 요청만 root ctx 로 기록(exemplar 유지), label 없음. bucket `128, 512, 1024, 2048, 4096, 8192, 10240, 16384`.
+- 단위 테스트: `execute/instrumentation_test.go`, `compile/instrumentation_test.go`(compiler rustc span 은 처음으로 tracetest 로 검증)
+- `scripts/verify/m5-01.sh`(먼저 실패 상태로 커밋 56a5fb0), `make verify` 의 `VERIFY_ALL` 끝에 추가. port-forward mimir 27080 / loki 27100 / tempo 27200. 다른 verify 를 호출하지 않는다.
+
+### PRD 해석 / 차이
+- **PRD 해석: TR-02 의 에러 메시지 = 분류형 메시지. trace 와 로그 모두 사용자 입력 문자열 없음. 원문은 ipfs.cid 로 조회한다.** (원문 = 응답 JSON 의 message/stderr 와 업로드된 output.txt/status.json. 응답 JSON 은 바꾸지 않았다.)
+- PRD 8.2 `lgtm_output_bytes` 는 "권장"이고 bucket 수치가 없다. 위 bucket 은 이 피처의 제안이다(10240 이 별도 경계라 잘린 출력이 `le=10240` 에 모인다).
+- TR-02 의 업로드 실패 처리는 F-M3-02 해석 그대로(ipfs.upload 만 ERROR). 413/429/400 은 ERROR 아님(단위 테스트 `TestRejectedRequestsAreNotErrors`).
+
+### 검증표 (VM `lgtm-vm`, 로그 `~/lgtm-logs/m5-01-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 구현 전 m5-01.sh 가 실패 | `m5-01-pre.log` | 확인(VM): 160 PASS / 49 FAIL (trace 원문과 Loki 에 rustc 식별자 노출, event 에 exception.type, `lgtm.status`/`rustc.*` 없음, `lgtm_output_bytes` 없음) |
+| 7개 케이스(success, compile_error, deny-list, panic, exit 3, timeout, memory_limit)의 span 구성 · ERROR · error event(message 하나, ≤512B) · 분류 문구 · TR-03/04 값 일치 · `lgtm.status` · `rustc.*` | `m5-01-run2.log` ALL PASS (209 PASS) | 확인(VM) |
+| trace 원문 전체와 Loki 로그(본문+structured metadata)에 고유 토큰(식별자, panic 메시지) 0건, trace_id 로그 7~11건씩 존재 | 같은 로그 | 확인(VM) |
+| `lgtm_output_bytes_bucket` 저장 이름, `le` 에 10240 | 같은 로그 | 확인(VM) |
+| `lgtm_execution_duration_seconds_bucket`, `lgtm_stage_duration_seconds_bucket` 의 `le` = PRD 8.2 | 같은 로그 | 확인(VM) |
+| `lgtm_*` label 이름에 cid/sha/trace 없음(164 series), exemplar 가 trace_id 반환 | 같은 로그 | 확인(VM) |
+| `go test ./internal/...` (docker `golang:1.27.3-trixie`) | m5-01.sh 안에서 실행 | 확인(VM) |
+| `make clean && make`, `make` 연속 exit 0 | `m5-01-clean-make.log`, `m5-01-make2.log` | 확인(VM) |
+| `make verify` 전체 exit 0 | `m5-01-fullverify.log` | **미확인: `VERIFY_EXIT=2`, m2-04 에서 중단.** 아래 참고 |
+| m1-01~m2-03 | 같은 `make verify` 실행 | 확인(VM): ALL PASS |
+| m3-01, m3-02, m4-01, m4-02, m6-03, m3-03, m5-01 | m2-04 뒤라 `make verify` 가 실행하지 못해 같은 순서로 하나씩 실행 (`m5-01-rest-*.log`) | 확인(VM): 전부 exit 0. 단 `make verify` 한 번으로 통과한 것은 아님. m5-01 은 아래 스크립트 수정 후 `m5-01-run2.log` |
+
+**m2-04 실패 (원인 미확정, 정보 수집 1회 후 재실행하지 않음)**: `FAIL: lgtm_executions_total ... increase() = '12' (기대 11)`. 나머지 m2-04 검사는 모두 PASS. 같은 구간의 `sum by (status)(lgtm_executions_total)` 증가 시각을 조회하니 m2-03 의 마지막 요청(15:38:35, success +1 / timeout +2)이 m2-04 시작 직후이다. m2-04 의 `increase(...[경과+15s])` 구간이 직전 스크립트 꼬리에 걸렸을 가능성이 있다(**추정, 미확인**). 이 피처의 변경은 `RecordExecution` 호출 횟수를 바꾸지 않았다. PR 직전 전체 verify 에서 m2-04 가 한 번 실패한 상태로 남는다.
+
+**m5-01.sh 수정 1건**: 전체 실행 중 `[ml]` trace 에 rustc span 이 없어 1건 FAIL 했다. 원인은 `fetch_trace` 가 root 와 ipfs.upload 만 보이면 반환해서, 별도로 export 되는 compiler span 보다 먼저 가져온 것이다. rustc 까지 보일 때 종료하도록 고쳤고 이후 ALL PASS.
+
+### 된 것 / 안 된 것
+- 아래 검증표의 "확인(VM)" 항목만 실제로 실행한 결과다.
+- 응답 JSON 에 exit_code 필드가 없어서 `exec.exit_code` 는 success=0, `process::exit(3)`=3 (응답 message `exit status 3` 와 대응), trap=nonzero(-1) 로 비교했다. panic 의 정확한 값 대조는 하지 않았다.
+- compile timeout(15s), 컴파일러 내부 오류, 413/429/400 의 trace 는 m5-01.sh 가 요청하지 않는다(단위 테스트로만 확인).
+- Mac 에서 돌린 `go test` 는 참고용이고 검증으로 치지 않는다.
+
+### 다음 단계
+- F-M5-02 (dashboard JSON + provisioning). TraceQL 은 `span.lgtm.status` 와 `lgtm_output_bytes_*` 를 쓸 수 있다.
+- 로그에 남은 사용자 유래 문자열은 이 피처 범위에서는 없다(Loki 검사 통과). 단 pod 로그(DaemonSet 수집)는 아직 없는 구성이라 확인 대상이 아니었다.
+
 ## F-M3-02 ipfs-upload (브랜치 feat/m3-02-ipfs-upload)
 
 ### 한 일

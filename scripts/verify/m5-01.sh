@@ -157,11 +157,11 @@ for c in $CASES; do
 done
 
 # ---- 3. Tempo: 케이스별 trace 분석 ----
-fetch_trace() { # <trace_id> <out> : 기대 span 수가 모일 때까지 최대 60s 폴링 (root 와 ipfs.upload 가 보이면 종료)
+fetch_trace() { # <trace_id> <out> : 최대 60s 폴링. backend 와 compiler 는 span 을 각자 batch 로 export 하므로 rustc 까지 보여야 종료한다
 	local i
 	for i in $(seq 1 30); do
 		curl -s --max-time 10 "http://127.0.0.1:$P_TEMPO/api/traces/$1" >"$2"
-		grep -q '"ipfs.upload"' "$2" && grep -q '"POST /api/execute"' "$2" && return 0
+		grep -q '"ipfs.upload"' "$2" && grep -q '"POST /api/execute"' "$2" && grep -q '"rustc"' "$2" && return 0
 		sleep 2
 	done
 	return 1
