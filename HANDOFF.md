@@ -10,6 +10,40 @@
 ### 다음 단계
 -->
 
+## F-M6-01 readme (브랜치 feat/m6-01-readme)
+
+### 한 일
+- `README.md`(영어, 신규): 첫 줄 이탤릭 + Description / Instructions / Architecture(Mermaid 2개) / Technical choices / Security model / Observability / IPFS and NAT / Demo walkthrough / Make targets / Known limitations / Resources(`### Use of AI`). 출처는 PRD 1·2·4·5·7~11장, HANDOFF, Makefile, images.txt, k8s/, 코드(제한값은 `wasmexec.go`, `runner.go`, `compiler.yaml` 로 대조). 스크린샷 없음, 코드·manifest·Makefile 동작·PRD 변경 없음.
+- `docs/evidence/ipfs-check-utm-bridged-20261023.txt`(사용자가 실행한 `make ipfs-check` 출력), `docs/evidence/ipfs-check-utm-shared-20261023.txt`(VM `~/lgtm-logs/m3-03-run3.log` 를 그대로 복사, 헤더 1줄만 추가). README 의 IPFS and NAT 표가 링크한다.
+- `scripts/verify/m6-01.sh`(먼저 실패 상태로 커밋 7129ab7) + `Makefile` `VERIFY_ALL` 끝에 `m6-01`(목록만, 동작 변경 아님).
+
+### README 에서 정한 표현 (사용자 지시)
+- UTM Bridged `first_blocked=router`, Shared `first_blocked=utm` 은 둘 다 **추정(inferred)** 으로 쓰고 `docs/evidence/` 로 근거를 단다. Bridged 에서도 public gateway 0/5.
+- ipfs.io: 종료 날짜를 쓰지 않는다(공지가 ipfs.io 를 명시하지 않음). curl 429, 브라우저 흉내 403, "service worker gateway 로 전환 중, 브라우저 동작은 측정 안 함" 만 쓴다.
+- Use of AI: Claude Code 는 git/HANDOFF/CLAUDE.md 로 확인한 사실만(`4d34bde` 기준 non-merge 93개 중 trailer 89개, trailer 없는 4개는 `d86043d` 와 CLAUDE.md 규칙 수정 3개, merge 21개; 모두 명령으로 센 값). claude.ai chat 사용은 사용자 제공 문장이며 git 으로 확인 불가라고 README 에 명시.
+
+### 된 것 / 안 된 것
+- 검증표 참고.
+- 남은 자리표시: `【login】` 은 `taebkim` 으로 교체됨, `【F-M6-04 결과】` 는 F-M6-04 블록 기준으로 채움(배포 직후 504 는 해소로 Make targets 아래 "Rolling restarts" 한 단락으로 이동, `make verify` 전체는 F-M6-02 에서 확인 예정이라 Known limitations 에 1줄), `【사람이 직접 한 작업·검토 범위】` 는 사용자 제공 문단으로 교체됨(Use of AI 의 "What the author did", git 으로 확인 불가라고 README 에 표시).
+- README 의 "호스트 PC 접속" 은 옵션 안내이며 verify 대상이 아니다. 사용자 확인: Mac 에서 UTM Shared VM IP(192.168.64.x)로 ssh 접속됨. 호스트 브라우저 접속(호스트 /etc/hosts 수정)은 확인하지 않았고 README 에 그렇게 적었다.
+- 이미지/버전 번호가 바뀌면 README Technical choices 표도 고쳐야 한다(m6-01.sh 가 불일치를 FAIL 로 잡는다).
+
+### 다음 단계
+- F-M6-02 에서 `make verify` 전체를 확인한 뒤 README Known limitations 의 해당 줄을 갱신.
+- origin/main(F-M6-04) merge 완료: Makefile `VERIFY_ALL` 에 `m6-04 m6-01` 둘 다, HANDOFF 에 두 블록 모두 남김.
+
+### 검증표
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| README 없이 m6-01.sh 는 실패하는 상태로 먼저 커밋 | 커밋 7129ab7 (스크립트는 README 없으면 `FAIL: README.md 없음` 후 exit 1) | 코드로 확인(실행은 안 함) |
+| m6-01.sh ALL PASS: 첫 줄 문구, 필수 섹션 3개 + `### Use of AI`, README 의 make 타겟이 Makefile 에 존재, 저장소 경로/링크 존재(`docs/evidence/` 포함), 버전이 images.txt / Makefile / go.mod / package.json 과 일치 | VM `lgtm-vm` 에서 `bash scripts/verify/m6-01.sh` 1회, 로그 `~/lgtm-logs/m6-01-verify.log` | 확인(VM): exit 0, PASS 52건, FAIL 0, `m6-01: ALL PASS` |
+| 남은 자리표시 3개 | 같은 로그 INFO | 이 시점(merge 전) 3개. 이후 모두 채워 0개 (아래 merge 후 행) |
+| README 의 URL 3개와 make 명령이 실제와 일치 | URL 은 `scripts/hosts.sh` 의 host 3개와 `k8s/app/frontend.yaml` ingress host 대조, make 명령은 m6-01.sh 3번 검사 | URL: 사람이 대조(스크립트는 URL 을 검사하지 않음). make: 확인(VM) |
+| README 의 숫자(93 / 89 / 4 / 21) | `git log 4d34bde --no-merges` / `--merges` + `grep -c '^Co-Authored-By: Claude'` | 확인(macOS 의 git 명령 출력. 저장소 이력이라 호스트 무관) |
+| `make verify` 전체 | 실행 안 함: 이 피처는 문서 + verify 목록 추가뿐. VM 에서는 m6-01 만 1회 | 해당 없음 |
+| origin/main(F-M6-04) merge 후 m6-01.sh ALL PASS, 자리표시 0개 | VM `bash scripts/verify/m6-01.sh`, 로그 `~/lgtm-logs/m6-01-verify3.log` | 확인(VM): exit 0, PASS 52건. 같은 날 첫 실행(`m6-01-verify2.log`)은 README 의 `192.168.64.x` 를 버전 `192.168.64` 로 오인해 FAIL 1건 → 스크립트의 버전 정규식이 `.x` 뒤를 제외하도록 수정 후 재실행 통과 |
+| Makefile `VERIFY_ALL` 에 m6-04 와 m6-01 둘 다, HANDOFF 에 두 블록 | merge conflict 해결 후 `grep` / 파일 확인 | 확인(macOS 파일 내용) |
+
 ## F-M6-04 stability (브랜치 feat/m6-04-stability)
 
 ### 한 일

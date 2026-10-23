@@ -1,0 +1,21 @@
+# make ipfs-check, UTM Bridged (campus network 10.143.2.0/23), 2026-10-23 14:43 KST, run by user via ssh
+[ipfs-check] PEERID 12D3KooWC6JhbDvBkpoZq5je3qPb2xqvfFTMmX5LqkMEBJxmnuBL
+[ipfs-check] ipfs version 0.43.1
+[ipfs-check] S1 PASS kubo listen tcp+quic-v1 4001; docker 매핑 0.0.0.0:4001 [::]:4001 ; 호스트 127.0.0.1:4001 multistream 응답
+[ipfs-check] S2 PASS swarm peers=62 (아웃바운드 연결 가능)
+[ipfs-check] S3 INFO 공인 직접 주소=0, 사설/loopback=6, relay(/p2p-circuit) 주소=3 (relay 노드 2개), dcutr(hole punching) 프로토콜=yes, relay client(stop) 프로토콜=yes
+[ipfs-check] S4 FAIL AutoNAT reachability=Private (밖에서 4001 로 직접 접속 못 함, 공인 직접 주소 0개)
+[ipfs-check] S5 PASS add+pin+provide: 8848B pin='yes' provide='queued 1 CID(s) for immediate provide'
+[ipfs-check] CID Qmbp1wc9mU52MCXegVkYAqWwXR8gz5b7xKu2KDrgAXyozw
+[ipfs-check] S6 PASS http://ipfs.lgtm.local/ipfs/Qmbp1wc9mU52MCXegVkYAqWwXR8gz5b7xKu2KDrgAXyozw 200, 내용 일치
+[ipfs-check] S7 PASS delegated routing 에 광고됨 (30s 후, relay(/p2p-circuit) 주소만) "Addrs":["/ip4/70.122.144.10/tcp/4001/p2p/12D3KooWFc2yHr4xMZs2YTncbovkhJofCV1DdkRvFk3RmEgNoec5/p2p-circuit","/ip4/147.93.177.65/tcp/4001/p2p/12D3KooWSdCTArqFbk7Qtjt4kicafGrvqGpAodxbJita7o8Z21Rj/p2p-circuit","/dns4/70-122-144-10.k51qzi5uqu5dibqtbv3ucaaomqyswg6rg08y8wqswyjmi8fuei89l87sil1jk6.libp2p.di
+[ipfs-check] S8 SKIP ipfs-check 백엔드 응답 없음 (curl rc=28, 90s; rc=28 은 timeout). 이 VM 네트워크에서 백엔드에 접속하지 못해 판정 불가
+[ipfs-check] GATEWAY ipfs.io 429 0.1s policy gateway 정책(HTTP 요청 차단/service worker 전용), NAT 와 무관
+[ipfs-check] GATEWAY dweb.link 000 10.0s noconn 연결/DNS 실패 (gateway 쪽 또는 VM DNS, NAT 와 무관)
+[ipfs-check] GATEWAY gateway.pinata.cloud 404 65.2s fail The request timed out searching for a file on the non-pinata IPFS network. - ERR_ID:00016
+[ipfs-check] GATEWAY trustless-gateway.link 522 19.8s fail <!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]--> <!--[if I
+[ipfs-check] GATEWAY 4everland.io 504 31.7s fail error code: 504
+[ipfs-check] S9 FAIL public gateway 0/5 (연결 불가 1, 정책 차단 1, 실제로 조회해 실패 3)
+[ipfs-check] INFO CLUE VM 기본 게이트웨이=10.143.2.1, 첫 공인 IP 이전 사설 hop 수=0 (traceroute 1.1.1.1)
+[ipfs-check] SUMMARY first_blocked=router reason=inferred: AutoNAT=Private, 기본 게이트웨이 10.143.2.1 가 사설 LAN (공유기 포트포워딩 필요)
+[ipfs-check] 층 순서: VM 내부 4001 → UTM(Mac) → 공유기 → 인터넷. utm/router 는 VM 안에서 추정만 가능, 확정은 UTM·공유기 설정 확인
