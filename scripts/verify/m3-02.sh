@@ -4,6 +4,8 @@
 # /api/execute 결과가 Kubo 에 main.rs / output.txt / status.json 디렉토리로 올라가고(pin), 같은 입력이면 같은 CID,
 # Tempo ipfs.upload span 의 ipfs.cid, Kubo 5001 이 막히면 10초 timeout → 결과는 반환하고 cid/ipfs_url=null + span ERROR.
 # 5001 차단은 kubo-ingress NetworkPolicy 를 임시로 바꾼다 (원본을 저장해 trap 에서 그 원본으로 복구한다. kubo.yaml 전체 재적용 안 함).
+# 이 클러스터의 NetworkPolicy 는 연결을 거부(REJECT)해 빨리 실패하므로, 실제 10초 timeout 은 별도로 Kubo daemon 을 kill -STOP 해서 잰다
+# (커널이 연결은 받지만 응답이 없는 상태). trap 에서 반드시 kill -CONT 한다.
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then
@@ -43,6 +45,9 @@ POLL_MAX=20 # 40s
 PF_LOG_DIR="$TMP"
 
 BLOCKED=0
+STOPPED_PID=""
+NODE="k3d-${CLUSTER_NAME:-lgtm}-server-0"
+dk() { "$ROOT/scripts/with-docker.sh" docker "$@"; }
 ORIG_NP="$TMP/kubo-ingress.orig.json"
 PROBE=probe-backend-m302
 
@@ -50,7 +55,12 @@ restore_np() {
 	[ "$BLOCKED" = 1 ] || return 0
 	k replace -f "$ORIG_NP" >/dev/null 2>&1 && BLOCKED=0
 }
+cont_kubo() {
+	[ -n "$STOPPED_PID" ] || return 0
+	dk exec "$NODE" kill -CONT "$STOPPED_PID" >/dev/null 2>&1 && STOPPED_PID=""
+}
 cleanup() {
+	cont_kubo
 	restore_np
 	k -n "$NS" delete pod "$PROBE" --ignore-not-found --wait=false >/dev/null 2>&1
 	pf_stop
@@ -312,6 +322,37 @@ wait_state ok && pass "복구 후 5001 접근 성공 (poll 상한 $((POLL_MAX * 
 [ "$(k -n "$IPFS_NS" get networkpolicy kubo-ingress -o jsonpath='{.spec}' 2>/dev/null)" = "$SPEC_BEFORE" ] && pass "복구된 kubo-ingress spec 이 차단 전과 동일" || fail "복구된 kubo-ingress spec 이 차단 전과 다름"
 send ok
 [ "$(field ok "d['cid'] or ''")" = "$CID_OK" ] && pass "복구 후 요청은 다시 같은 CID 를 받음" || fail "복구 후 cid='$(field ok "d['cid']")' (기대 $CID_OK)"
+
+# ---- 7b. 실제 10초 timeout: Kubo daemon 을 kill -STOP (연결은 받지만 응답 없음) ----
+kubo_restarts() { k -n "$IPFS_NS" get pod kubo-0 -o jsonpath='{.status.containerStatuses[?(@.name=="kubo")].restartCount}' 2>/dev/null; }
+RESTART_BEFORE="$(kubo_restarts)"
+KPID="$(dk exec "$NODE" sh -c "ps -eo pid,args | awk '\$2==\"ipfs\" && \$3==\"daemon\" {print \$1; exit}'" 2>/dev/null)"
+if [ -n "$KPID" ]; then
+	pass "Kubo daemon PID=$KPID (node $NODE), restartCount 시작값=$RESTART_BEFORE"
+	STOPPED_PID="$KPID"
+	dk exec "$NODE" kill -STOP "$KPID" >/dev/null 2>&1 || fail "kill -STOP 실패"
+	wait_state blocked && pass "Kubo 정지 확인: 5001 요청에 응답 없음 (poll 상한 $((POLL_MAX * POLL_STEP))s, 실측 ${WAITED}s)" || fail "Kubo 를 STOP 했는데 5001 이 응답함 (${WAITED}s) — 이후 timeout 검사 무효"
+	mkreq stp "fn main() { println!(\"m3-02 stopped $MARK\"); }"
+	send stp
+	dt="$(cat "$TMP/stp.dt")"
+	[ "$(code_of stp)" = 200 ] && pass "Kubo 정지 중에도 200 (${dt}s)" || fail "Kubo 정지 중 HTTP '$(code_of stp)' (${dt}s)"
+	num_between "$dt" 10 13 && pass "응답이 10~13초 사이 (${dt}s) = 업로드 10초 timeout 에서 끊김" || fail "응답 ${dt}s (기대 10~13초)"
+	[ "$(field stp "d['status']")" = success ] && [ "$(field stp "d['stdout'] == 'm3-02 stopped $MARK\\n'")" = True ] && pass "실행 결과 그대로 (status=success, stdout 일치)" || fail "실행 결과 변경됨: status='$(field stp "d['status']")'"
+	[ "$(field stp "d['cid'] is None")" = True ] && [ "$(field stp "d['ipfs_url'] is None")" = True ] && pass "cid=null, ipfs_url=null" || fail "cid/ipfs_url 이 null 아님: $(head -c 300 "$TMP/stp.json")"
+	info "timings_ms.ipfs_upload=$(field stp "d['timings_ms']['ipfs_upload']")ms (timeout 경로 실측)"
+	SSP="$(trace_summary "$(field stp "d['trace_id']")")"
+	[ "$(printf '%s' "$SSP" | pyj "[s for s in d if s['name']=='ipfs.upload'][0]['err']")" = True ] && pass "Tempo: ipfs.upload span status ERROR" || fail "Tempo: ipfs.upload span ERROR 아님 ($(printf '%s' "$SSP" | head -c 300))"
+	[ "$(printf '%s' "$SSP" | pyj "[s for s in d if s['root']][0]['err']")" = False ] && pass "Tempo: root span 은 ERROR 아님" || fail "Tempo: root span 이 ERROR"
+	# 복구: kill -CONT + 5001 응답 poll
+	if dk exec "$NODE" kill -CONT "$KPID" >/dev/null 2>&1; then STOPPED_PID=""; pass "kill -CONT"; else fail "kill -CONT 실패 (trap 에서 재시도)"; fi
+	wait_state ok && pass "kill -CONT 후 5001 응답 복구 (poll 상한 $((POLL_MAX * POLL_STEP))s, 실측 ${WAITED}s)" || fail "kill -CONT 후에도 5001 무응답 (${WAITED}s)"
+	send ok
+	[ "$(field ok "d['cid'] or ''")" = "$CID_OK" ] && pass "복구 후 요청은 다시 같은 CID 를 받음" || fail "복구 후 cid='$(field ok "d['cid']")'"
+	RESTART_AFTER="$(kubo_restarts)"
+	[ "$RESTART_BEFORE" = "$RESTART_AFTER" ] && pass "STOP/CONT 동안 Kubo 컨테이너 재시작 없음 (restartCount $RESTART_BEFORE → $RESTART_AFTER)" || fail "Kubo 컨테이너가 재시작됨 (restartCount $RESTART_BEFORE → $RESTART_AFTER) — 이 검사는 빼고 미확인으로 남길 것"
+else
+	fail "Kubo daemon PID 를 찾지 못함 (docker exec $NODE ps) — 10초 timeout 실측 불가"
+fi
 
 # ---- 8. Mimir: ipfs_upload stage count 증가 (성공 + timeout 업로드 포함) ----
 mq() {
