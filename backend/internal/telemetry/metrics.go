@@ -69,6 +69,16 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	return &Metrics{executions: executions, execDur: execDur, stageDur: stageDur, rejected: rejected, meter: m}, nil
 }
 
+// InitSeries는 counter series를 0으로 만들어 둔다. 새 process의 첫 export부터 모든 status series가 0에서 시작하므로
+// 재시작 뒤에도 이전 process의 값이 남아 보이지 않고, rate/increase 계산도 첫 증가분을 놓치지 않는다.
+func (m *Metrics) InitSeries(language string, statuses []string) {
+	ctx := context.Background()
+	for _, st := range statuses {
+		m.executions.Add(ctx, 0, metric.WithAttributes(attribute.String("status", st), attribute.String("language", language)))
+	}
+	m.rejected.Add(ctx, 0)
+}
+
 // RecordQueueRejected는 429 거절 1건을 센다. 실행이 시작되지 않은 요청이라 lgtm_executions에는 넣지 않는다.
 func (m *Metrics) RecordQueueRejected(ctx context.Context) { m.rejected.Add(ctx, 1) }
 

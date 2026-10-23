@@ -50,6 +50,12 @@ const (
 	maxQueueWait = 45 * time.Second
 )
 
+// InitMetrics는 lgtm_executions의 모든 status series와 lgtm_queue_rejected를 0으로 시작시킨다 (운영 기동 시 1회).
+func InitMetrics(m *telemetry.Metrics) {
+	m.InitSeries("rust", []string{statusSuccess, statusCompileError, statusInternalError,
+		wasmexec.StatusRuntimeError, wasmexec.StatusTimeout, wasmexec.StatusMemoryLimit})
+}
+
 // NewLimiter는 PRD 기준(처리 2 + 대기 8, 대기 상한 45초)의 Limiter를 만든다.
 func NewLimiter() *limiter.Limiter { return limiter.New(maxActive, maxWaiting, maxQueueWait) }
 

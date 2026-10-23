@@ -28,6 +28,7 @@ k() { kubectl --context "$CTX" "$@"; }
 
 P_MIMIR=24080
 P_TEMPO=24200
+P_BACKEND=24081
 TMP="$(mktemp -d)"
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
@@ -53,8 +54,9 @@ elapsed() { python3 -I -c 'import sys; print("%.2f" % (float(sys.argv[2])-float(
 num_between() { python3 -I -c 'import sys; v,a,b=map(float,sys.argv[1:4]); sys.exit(0 if a<=v<=b else 1)' "$1" "$2" "$3" 2>/dev/null; }
 field() { pyj "$2" <"$TMP/$1.json"; } # field <이름> <파이썬 식 (d=응답)>
 status_of() { field "$1" "d['status']"; }
-code_of() { cat "$TMP/$1.code" 2>/dev/null; }
-dt_of() { cat "$TMP/$1.dt" 2>/dev/null; }
+# send_bg 는 .code 에 "<HTTP 코드>\n<time_total>" 을 남긴다 (send 는 코드만 + .dt)
+code_of() { head -n1 "$TMP/$1.code" 2>/dev/null; }
+dt_of() { if [ -f "$TMP/$1.dt" ]; then cat "$TMP/$1.dt"; else sed -n 2p "$TMP/$1.code" 2>/dev/null; fi; }
 
 mkreq() { python3 -I -c 'import json,sys; print(json.dumps({"language":"rust","code":sys.argv[1]}))' "$2" >"$TMP/$1.req"; } # mkreq <이름> <소스>
 
@@ -84,7 +86,7 @@ send() {
 # send_bg <이름> : 백그라운드 curl. PID 를 LAST_PID 에 남긴다 (kill 하면 클라이언트가 끊긴다)
 send_bg() {
 	local name="$1"
-	curl -s --max-time 90 --resolve "$HOST:80:127.0.0.1" -D "$TMP/$name.hdr" -o "$TMP/$name.json" -w '%{http_code}' \
+	curl -s --max-time 90 --resolve "$HOST:80:127.0.0.1" -D "$TMP/$name.hdr" -o "$TMP/$name.json" -w '%{http_code}\n%{time_total}' \
 		-X POST -H 'Content-Type: application/json' --data-binary @"$TMP/$name.req" "$URL" >"$TMP/$name.code" 2>/dev/null &
 	LAST_PID=$!
 	BG_PIDS+=("$LAST_PID")
@@ -122,8 +124,7 @@ info "이전 export 가 가라앉도록 8초 대기 후 기준값 측정"
 sleep 8
 R0="$(mval lgtm_queue_rejected_total)"
 E0="$(mval lgtm_executions_total)"
-Q0="$(mval 'lgtm_stage_duration_seconds_count{stage="queue"}')"
-info "기준값: rejected=$R0 executions=$E0 stage_queue_count=$Q0"
+info "기준값: rejected=$R0 executions=$E0"
 
 # ---- 1. 65KB body → 413, 응답이 짧음 ----
 mkreq big "// $(head -c 66000 /dev/zero | tr '\0' 'a')
@@ -135,13 +136,30 @@ c="$(code_of big)"
 [ "$c" = "413" ] && num_between "$(dt_of big)" 0 1 && pass "413 응답 $(dt_of big)s (< 1s)" || fail "413 응답 $(dt_of big)s (기대 < 1s)"
 [ "$(status_of big)" = "payload_too_large" ] && pass "413 본문 status=payload_too_large" || fail "413 본문 status='$(status_of big)' body=$(head -c 200 "$TMP/big.json")"
 
-# ---- 2. Content-Length 만 크고 본문이 없는 요청 → 본문을 기다리지 않고 즉시 413 ----
-mkreq clen ""
-: >"$TMP/clen.req"
-send clen -H 'Content-Length: 5000000' --max-time 5
-c="$(code_of clen)"
-[ "$c" = "413" ] && pass "Content-Length 5000000 (본문 0바이트) → 413" || { fail "Content-Length 5000000 → HTTP '$c' (기대 413)"; diag_http clen; }
-[ "$c" = "413" ] && num_between "$(dt_of clen)" 0 2 && pass "Content-Length 거부 $(dt_of clen)s (본문을 기다리지 않음)" || fail "Content-Length 거부 $(dt_of clen)s (기대 < 2s)"
+# ---- 2. 본문을 다 읽지 않음 ----
+# (a) backend 에 직접: Content-Length 만 크고 본문은 보내지 않는다. 본문을 기다리면 응답이 오지 않는다
+pf_forward "$NS" backend "$P_BACKEND:80" || fail "port-forward (backend) 실패"
+r="$(python3 -I - "$P_BACKEND" <<'PY'
+import socket, sys, time
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=3)
+t0 = time.time()
+s.sendall(b"POST /api/execute HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 5000000\r\n\r\n")
+try:
+    line = s.recv(200).split(b"\r\n")[0].decode()
+except Exception as e:
+    line = "ERR %s" % e
+print("%s|%.2f" % (line, time.time() - t0))
+PY
+)"
+case "$r" in
+"HTTP/1.1 413"*) num_between "${r##*|}" 0 2 && pass "backend 직접: Content-Length 5000000 (본문 없음) → 413, ${r##*|}s" || fail "backend 직접 413 이 느림: $r" ;;
+*) fail "backend 직접: Content-Length 5000000 (본문 없음) → '$r' (기대 HTTP/1.1 413)" ;;
+esac
+# (b) Ingress 경유: 실제 5MB 본문
+head -c 5000000 /dev/zero | tr '\0' 'a' >"$TMP/huge.req"
+send huge
+c="$(code_of huge)"
+[ "$c" = "413" ] && num_between "$(dt_of huge)" 0 2 && pass "Ingress 경유 5MB body → 413, $(dt_of huge)s" || { fail "5MB body → HTTP '$c' $(dt_of huge)s"; diag_http huge; }
 
 # ---- 3. 64KB 안쪽 정상 요청 → 413 아님 ----
 mkreq ok "// $(head -c 60000 /dev/zero | tr '\0' 'a')
@@ -201,7 +219,14 @@ done
 # ---- 6. Mimir: rejected +10, executions +11 (ok 1 + burst 10; 413/429/400 제외), stage="queue" +11 ----
 poll_delta "lgtm_queue_rejected_total" lgtm_queue_rejected_total "$R0" 10
 poll_delta "lgtm_executions_total" lgtm_executions_total "$E0" 11
-poll_delta 'lgtm_stage_duration_seconds_count{stage="queue"} (대기 0 도 기록)' 'lgtm_stage_duration_seconds_count{stage="queue"}' "$Q0" 11
+# stage="queue" 는 승인된 요청마다 기록된다 (대기 0 도). 같은 pod 에서 compile 도 승인된 요청마다 정확히 한 번이므로 count 가 같아야 한다
+# (rollout 으로 counter 가 리셋돼도 성립하는 불변식이라 기준값 차이 대신 쓴다)
+for i in $(seq 1 15); do
+	qc="$(mval 'lgtm_stage_duration_seconds_count{stage="queue"}')"; cc="$(mval 'lgtm_stage_duration_seconds_count{stage="compile"}')"
+	[ "$qc" = "$cc" ] && [ "$qc" != 0 ] && break
+	sleep 3
+done
+[ "$qc" = "$cc" ] && [ "$qc" != 0 ] && pass "stage=\"queue\" count($qc) == stage=\"compile\" count($cc) (대기 0 도 기록)" || fail "stage=\"queue\" count='$qc' stage=\"compile\" count='$cc'"
 nb="$(mval 'lgtm_stage_duration_seconds_bucket{stage="queue"}')"
 python3 -I -c 'import sys; sys.exit(0 if float(sys.argv[1])>0 else 1)' "$nb" && pass 'stage="queue" histogram bucket series 존재' || fail 'stage="queue" bucket series 없음'
 qs="$(mval 'lgtm_stage_duration_seconds_sum{stage="queue"}')"
