@@ -136,6 +136,12 @@ def exemplar_ids(frames):
     return ids
 
 
+def trace_opens(tid):
+    """exemplar 클릭이 여는 것과 같은 조회: Grafana 가 Tempo 로 프록시하는 /api/traces/<id> 가 root span 을 가진 trace 를 돌려준다."""
+    st, body = call("GET", "/api/datasources/proxy/uid/tempo/api/traces/" + tid)
+    return st == 200 and "POST /api/execute" in json.dumps(body)
+
+
 def poll(d, p, t, ok):
     """ok(frames) 가 참이 될 때까지 최대 POLL_MAX 초 3초 간격. (경과 초, st, frames) 를 돌려준다."""
     t0 = time.time()
@@ -183,6 +189,7 @@ if mode == "check":
         for t in ex:
             ids += exemplar_ids(run(d, p, t)[1])
         out(len(ids) > 0 and all(re.fullmatch(r"[0-9a-f]{32}", i) for i in ids), "[%s] 응답에 exemplar trace_id %d개 (32자리 hex)" % (key, len(ids)))
+        out(bool(ids) and trace_opens(ids[0]), "[%s] exemplar trace_id %s 로 Tempo trace 조회 (root span POST /api/execute)" % (key, ids[0] if ids else None))
 
     # 2. Slowest: duration 조건 없음, limit 200, duration 내림차순
     p = find(d, "Slowest executions")
@@ -216,7 +223,9 @@ if mode == "check":
         n = numbers(frames)
         out(st == 200 and len(n) > 0, "Longest 쿼리 non-empty (HTTP %s, 값 %d개, polling %d초 / 상한 %d초)" % (st, len(n), el, POLL_MAX))
         ids = exemplar_ids(frames)
-        out(len(ids) > 0 and all(re.fullmatch(r"[0-9a-f]{32}", i) for i in ids), "Longest 응답에 exemplar traceId %d개" % len(ids))
+        # Tempo TraceQL metrics 의 exemplar traceId 는 앞자리 0 이 빠져 32자보다 짧을 수 있다. Tempo 는 짧은 id 도 같은 trace 로 조회한다 (F-M5-03 VM 실측)
+        out(len(ids) > 0 and all(re.fullmatch(r"[0-9a-f]{1,32}", i) for i in ids), "Longest 응답에 exemplar traceId %d개 (hex 1~32자, 앞자리 0 생략 허용)" % len(ids))
+        out(bool(ids) and all(trace_opens(i) for i in ids), "Longest exemplar traceId %d개 모두 Tempo trace 조회 성공 (root span POST /api/execute)" % len(ids))
         print("INFO: Longest 최댓값 %.3fs" % (max(n) if n else float("nan")), flush=True)
 
     # 4. 권장: 실패 trace 표
