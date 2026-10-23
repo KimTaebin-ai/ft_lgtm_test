@@ -276,7 +276,7 @@ Iterating after a code change: `make build deploy` is enough; `make clean && mak
 
 ### Use of AI
 
-Facts below come from the git history, `HANDOFF.md` and `CLAUDE.md`, except the item marked as author-provided.
+Facts below come from the git history, `HANDOFF.md` and `CLAUDE.md`, except the items marked as provided by the author.
 
 **Claude Code (CLI), model Claude Sonnet 5.5 — used for implementation work, one feature per branch.**
 
@@ -289,4 +289,4 @@ Facts below come from the git history, `HANDOFF.md` and `CLAUDE.md`, except the 
 
 **Claude (claude.ai, chat) — used as a technical reviewer and decision partner**: drafting the PRD, writing a kickoff prompt for each feature, reviewing Claude Code's plans and results before approval or merge, and comparing technical options. All technical decisions and approvals were made by the author. *(Provided by the author; not verifiable from git.)*
 
-**What the author did.** Technical decisions (including every change to the PRD, which Claude Code had to ask for instead of implementing silently), approving or amending each plan, reviewing results and verification tables, merging the pull requests, and manual checks in the VM's Firefox (recorded in `HANDOFF.md`; for example the dashboards walkthrough on 2026-10-23, without screenshots). Other work done by hand: 【사람이 직접 한 작업·검토 범위】
+**What the author did** *(provided by the author; only the manual checks recorded in `HANDOFF.md` can be traced in the repository)*. The author made all technical decisions and approvals: the stack (Rust compiled to WASM, Go + wasmtime-go, k3d, LGTM stack with an OpenTelemetry Collector), the security limits and the compiler isolation model, and every scope change recorded as "PRD change" in `HANDOFF.md`. The author approved or rejected each Claude Code plan before implementation, reviewed every result before merging, and decided the merge order between parallel features. The author ran the manual checks in the VM's Firefox (failure and limit scenarios in the playground, and the metric → exemplar → trace → logs → IPFS walkthrough), ran the IPFS reachability test on a campus network with UTM Bridged networking, and contacted the subject authors about the public gateway requirement.

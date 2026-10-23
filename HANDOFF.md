@@ -24,7 +24,7 @@
 
 ### 된 것 / 안 된 것
 - 검증표 참고.
-- 남은 자리표시: `【login】` 은 `taebkim` 으로 교체됨, `【F-M6-04 결과】`(Known limitations 1줄, 배포 직후 504 와 `make verify` 전체 통과 여부를 한 자리표시로 합침), `【사람이 직접 한 작업·검토 범위】`(Use of AI 마지막 줄, git/HANDOFF 로 확인할 수 없는 수동 작업).
+- 남은 자리표시: `【login】` 은 `taebkim` 으로 교체됨, `【F-M6-04 결과】`(Known limitations 1줄, 배포 직후 504 와 `make verify` 전체 통과 여부를 한 자리표시로 합침), `【사람이 직접 한 작업·검토 범위】` 는 사용자 제공 문단으로 교체됨(Use of AI 의 "What the author did", git 으로 확인 불가라고 README 에 표시).
 - README 의 "호스트 PC 접속" 은 옵션 안내이며 verify 대상이 아니다. 사용자 확인: Mac 에서 UTM Shared VM IP(192.168.64.x)로 ssh 접속됨. 호스트 브라우저 접속(호스트 /etc/hosts 수정)은 확인하지 않았고 README 에 그렇게 적었다.
 - 이미지/버전 번호가 바뀌면 README Technical choices 표도 고쳐야 한다(m6-01.sh 가 불일치를 FAIL 로 잡는다).
 
