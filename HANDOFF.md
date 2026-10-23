@@ -43,6 +43,17 @@ first_blocked=utm (inferred). 관측한 것:
 - 된 것: `make ipfs-check` 가 끝까지 실행되고 층을 출력, 로컬 gateway 에서 테스트 CID 열림, relay 주소 획득·광고됨까지 확인
 - 안 된 것: public gateway 에서 CID 열림(IP-06), 외부 프로브(S8). 이번 PR 에서 UTM·공유기는 변경하지 않음
 
+### 검증표 (VM lgtm-vm, 로그 `~/lgtm-logs/m3-03-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| `make ipfs-check` 가 끝까지 실행되고 S1~S9·GATEWAY·SUMMARY 출력, exit 0 | `m3-03-run3.log`, `m3-03-verify.log` | 확인(VM) 약 95s |
+| m3-03.sh ALL PASS (19 검사: 형식, 로컬 gateway 200, 파일 8848B, HANDOFF 기록) | `m3-03-verify.log`, S7 판정 수정 후 `m3-03-verify2.log` | 확인(VM) |
+| `make verify` 전체 exit 0 (m3-03 포함) | `m3-03-fullverify.log` `VERIFY_EXIT=0` 7m30s | 확인(VM). **단 이 실행은 S7 수정 전 스크립트**였고 수정 후에는 m3-03.sh 만 다시 실행 |
+| S7 광고됨 | delegated-ipfs.dev | **실행마다 다름**: 0s, 30s 후 PASS, 한 번은 60s 안에 미반영(FAIL → 당시 스크립트가 `first_blocked=internet` 으로 오판해서 수정: 광고 지연은 AutoNAT Private 판정보다 뒤). 지연 원인은 미확인 |
+| 포워딩 없는 현재 상태에서 public gateway 열림 | S9 | **안 열림 (0/5)**. 위 gateway 표 |
+| relay 경유 소형 파일 전송 | 독립 Kubo 노드 `ipfs cat` | **받아간 적 없음**. 정확한 에러: `Error: context deadline exceeded` (cat, 120s·30s·45s timeout 3회). 별도로 `ipfs swarm connect <우리 /p2p-circuit 주소>` 는 `success` 2회, 다른 시도에서 `Error: connect ... failure: failed to dial: ... all dials failed`. 우리 노드 bitswap blocks sent 0 |
+| S8 외부 프로브 | ipfs-check-backend.ipfs.io | 판정 불가 (TCP 15.204.31.98:443 접속 timeout) |
+
 ### PRD 영향 — 결정 필요
 - **IP-06(`ipfs.io/ipfs/<CID>` 에서 접근) 은 NAT 를 해결해도 ipfs.io HTTP gateway 가 2026-10-23 현재 429/403 이라 충족할 수 없다.** subject V.1.4 의 "public gateway 에서 같은 CID" 는 열리는 다른 gateway(예: gateway.pinata.cloud 는 응답하며 조회함)로 보여야 한다. "PRD 변경: IP-06 ipfs.io → 응답하는 public gateway 목록(`ipfs-check` 가 확인), 이유: ipfs.io HTTP gateway 종료" — 승인 대기. 코드는 바꾸지 않았다
 

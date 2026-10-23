@@ -35,6 +35,7 @@ PID="$(kx ipfs config Identity.PeerID 2>/dev/null)"
 echo "[ipfs-check] PEERID $PID"
 echo "[ipfs-check] $(kx ipfs version)"
 
+adv_fail=""
 blocked=""      # 첫 막힌 층
 reason=""
 block() { [ -z "$blocked" ] && { blocked="$1"; reason="$2"; }; }
@@ -109,7 +110,7 @@ if [ -n "$found" ]; then
 	res S7 PASS "delegated routing 에 광고됨 (${waited}s 후, $kind) ${pa:0:300}"
 else
 	res S7 FAIL "delegated routing 에 우리 PeerID 없음 (${DELEGATED_WAIT}s 대기, 응답 '${body:0:120}') = provide 가 DHT 에 반영 안 됨"
-	block internet "광고 안 됨: provide 가 DHT 에 반영되지 않음"
+	adv_fail=1 # 광고 지연은 NAT 층 판정보다 뒤 (S4 Private 이면 층 판정은 그쪽을 우선하고 reason 에만 덧붙인다)
 fi
 
 # ---- S8 "도달 가능": 외부 ipfs-check 백엔드가 우리에게 접속해 블록을 받는가 / S9 public gateway ----
@@ -165,7 +166,8 @@ res INFO CLUE "VM 기본 게이트웨이=${gwip:-없음}, 첫 공인 IP 이전 �
 if [ -z "$blocked" ]; then
 	case "$reach" in
 		Public|public)
-			if [ "$ok_n" -gt 0 ]; then blocked=none; reason="직접 도달 가능, gateway ${ok_n}곳 성공"
+			if [ -n "$adv_fail" ]; then blocked=internet; reason="직접 도달 가능인데 delegated routing 에 광고 안 됨 (provide 가 DHT 에 반영되지 않음)"
+			elif [ "$ok_n" -gt 0 ]; then blocked=none; reason="직접 도달 가능, gateway ${ok_n}곳 성공"
 			else blocked=internet; reason="직접 도달 가능한데 gateway 에서 안 열림 (gateway 쪽 정책/전파 지연: 연결 불가 ${noconn_n}, 정책 차단 ${policy_n})"; fi ;;
 		*)
 			case "$gwip" in
@@ -173,6 +175,7 @@ if [ -z "$blocked" ]; then
 				10.*|172.1[6-9].*|172.2?.*|172.3[01].*|192.168.*) blocked=router; reason="inferred: AutoNAT=$reach, 기본 게이트웨이 ${gwip} 가 사설 LAN (공유기 포트포워딩 필요)" ;;
 				*) blocked=internet; reason="AutoNAT=$reach 인데 VM 이 공인 게이트웨이 ${gwip:-없음} 뒤에 있음 (방화벽/ISP)" ;;
 			esac
+			[ -n "$adv_fail" ] && reason="$reason; S7 은 ${DELEGATED_WAIT}s 안에 광고가 안 보였음(DHT 반영 지연일 수 있음, 실행마다 0~30s 또는 미반영으로 달랐음)"
 			if [ "$ok_n" -gt 0 ]; then reason="$reason; 단 relay 경유로 gateway ${ok_n}곳 성공"; fi
 			if [ -n "$reachable_ext" ]; then reason="$reason; 단 외부 프로브는 성공"; fi ;;
 	esac
