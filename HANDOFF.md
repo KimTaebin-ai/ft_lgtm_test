@@ -33,7 +33,14 @@
 - 사용자: `【login】`, `【사람이 직접 한 작업·검토 범위】` 채우기.
 
 ### 검증표
-(VM 실행 후 채운다)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| README 없이 m6-01.sh 는 실패하는 상태로 먼저 커밋 | 커밋 7129ab7 (스크립트는 README 없으면 `FAIL: README.md 없음` 후 exit 1) | 코드로 확인(실행은 안 함) |
+| m6-01.sh ALL PASS: 첫 줄 문구, 필수 섹션 3개 + `### Use of AI`, README 의 make 타겟이 Makefile 에 존재, 저장소 경로/링크 존재(`docs/evidence/` 포함), 버전이 images.txt / Makefile / go.mod / package.json 과 일치 | VM `lgtm-vm` 에서 `bash scripts/verify/m6-01.sh` 1회, 로그 `~/lgtm-logs/m6-01-verify.log` | 확인(VM): exit 0, PASS 52건, FAIL 0, `m6-01: ALL PASS` |
+| 남은 자리표시 3개 | 같은 로그 INFO | `【login】`, `【F-M6-04 결과】`, `【사람이 직접 한 작업·검토 범위】` |
+| README 의 URL 3개와 make 명령이 실제와 일치 | URL 은 `scripts/hosts.sh` 의 host 3개와 `k8s/app/frontend.yaml` ingress host 대조, make 명령은 m6-01.sh 3번 검사 | URL: 사람이 대조(스크립트는 URL 을 검사하지 않음). make: 확인(VM) |
+| README 의 숫자(93 / 89 / 4 / 21) | `git log 4d34bde --no-merges` / `--merges` + `grep -c '^Co-Authored-By: Claude'` | 확인(macOS 의 git 명령 출력. 저장소 이력이라 호스트 무관) |
+| `make verify` 전체 | 실행 안 함: 이 피처는 문서 + verify 목록 추가뿐. VM 에서는 m6-01 만 1회 | 해당 없음 |
 
 ## F-M5-03 dashboard-traces (브랜치 feat/m5-03-dashboard-traces)
 
