@@ -60,8 +60,9 @@
 - **대기 상한 시간 45초** (`maxQueueWait`, handler.go): 최악 대기 = 앞 8개 × 요청 1건 소요 / 2. 정상 최악(loop {}: compile 0.25 + execute 5.1 + ipfs 0.1 ≈ 5.4s) 이면 약 22s (실측 20개 동시 시 마지막 요청까지 전체 26.99s). 이론 최악(15+5+10=30s)을 그대로 쓰면 120s 라 사용자가 기다릴 수 없어, 정상 최악의 약 2배인 45s 에서 429 (`queue.reason=wait_timeout`). 무한 대기 금지(SEC-08)
 - 429/413/400 은 `lgtm_executions_total` 에 넣지 않음. 429 는 root span `queue.rejected=true`, `queue.reason=full|wait_timeout` + WARN 로그 1줄 + `lgtm_queue_rejected_total`. 413 은 `request.too_large=true` + WARN 로그. 대기 중 끊김은 `queue.cancelled=true` + INFO 로그(응답 없음). 승인된 요청 root span 에 `queue.wait_ms`
 - metric: `lgtm_queue_rejected_total`(Counter), `lgtm_queue_active`, `lgtm_queue_waiting`(Int64ObservableGauge, label 없음, Mimir 이름 그대로 확인됨)
-- counter series 0 초기화(`execute.InitMetrics`, 기동 시 1회): executions 의 6개 status × rust 와 queue_rejected. 이유: 재시작한 pod 의 첫 export 부터 이전 pod 값이 아니라 0 에서 시작해야 verify 의 증가량 비교가 rollout 직후에도 성립 (처음에는 이게 없어 `lgtm_executions_total` 증가량이 -48 로 나왔다. 재시작으로 counter 가 리셋되는데 Mimir 에는 이전 pod 값이 남아 있었기 때문)
-- backend 메모리 실측 후 resources 조정: 아래
+- counter series 0 초기화(`execute.InitMetrics`, 기동 시 1회): executions 의 6개 status × rust 와 queue_rejected. 이유: **increase() 가 첫 증가분을 놓치지 않게** (series 가 첫 증가 때 생기면 그 첫 증가분이 구간 안의 첫 sample 이 되어 increase 에서 빠진다)
+- **-48 의 원인과 쿼리**: `m2-04-run1.log`. 쿼리는 `sum(lgtm_executions_total)` 의 **raw 값** 두 시점 차이였다 (`/prometheus/api/v1/query`, 기준 83 → 끝 35 = -48). 같은 label 의 series(`job,language,otel_scope_name,status`, pod label 없음)를 backend 재시작이 리셋하는데, Mimir 에는 이전 pod 의 마지막 값이 남아 있다가 새 pod 값으로 덮였기 때문. 즉 raw 값의 차이였고 구현 버그가 아니다. 그래서 m2-04.sh 의 counter 검사를 `sum(increase(<counter>[경과+15s]))` 기준으로 바꿨다 (리셋 보정, 외삽 때문에 정수로 반올림). gauge 와 `stage="queue"`(count == compile count 불변식)는 raw 비교가 아니다
+- backend resources: request 64Mi, **limit 512Mi 유지** (아래 '메모리')
 - `scripts/verify/m2-04.sh`(먼저 실패 상태로 커밋 5df36d3), `make verify` 에 m2-04 추가 (m2-03 뒤)
 
 ### 된 것 (검증표, VM `lgtm-vm` aarch64, 로그 `~/lgtm-logs/m2-04-*.log`)
@@ -71,7 +72,9 @@
 | 65KB body → 413, 0.01s, status=payload_too_large / 60KB 정상 → 200 / 깨진 JSON → 400 | m2-04.sh 1~4 | 확인(VM) |
 | 본문을 다 읽지 않음: backend 에 Content-Length 5000000 만 보내고 본문 0바이트 → 413 (0.00s), Ingress 경유 실제 5MB → 413 (0.03s) | m2-04.sh 2 | 확인(VM) |
 | 동시 20개(loop {}) → 429 정확히 10 / HTTP 200 정확히 10, 429 는 3초 안에 반환, 200 은 모두 status=timeout, 504 없음, 전체 26.99s | m2-04.sh 5 | 확인(VM) |
-| Mimir `lgtm_queue_rejected_total` +10, `lgtm_executions_total` +11 (정상 1 + burst 10, 413/429/400 제외) | m2-04.sh 6 | 확인(VM) |
+| Mimir `lgtm_queue_rejected_total` increase = 10 (burst 의 429 10건) | m2-04.sh 6 | **raw 차이 기준 실행에서 확인(VM, run2). increase() 기준으로 바꾼 뒤는 미실행** |
+| Mimir `lgtm_executions_total` increase = **11**. 근거: 60KB 정상 요청 1건(success) + 20개 burst 중 처리된 10건(timeout) = 실행이 시작된 요청. 제외(기대값에 안 들어감): 65KB 413 1, 5MB 413 1(Ingress), 깨진 JSON 400 1, burst 의 429 10건. (Content-Length 만 보낸 backend 직접 요청은 헤더만 보내고 끊으므로 핸들러가 413 만 쓰고 메트릭 없음) | m2-04.sh 6 | raw 차이 기준 실행에서 확인(VM, run2). increase() 기준으로 바꾼 뒤는 미실행 |
+| 부하 종료 후 15초 안에 `lgtm_queue_active=0`, `lgtm_queue_waiting=0` (Mimir) | m2-04.sh 9 | **미실행** (추가만 함) |
 | `stage="queue"` series 존재, count == `stage="compile"` count (대기 0 도 기록), bucket series 존재 | m2-04.sh 6 | 확인(VM) |
 | gauge `lgtm_queue_active`=2, `lgtm_queue_waiting`>0 관측, 종료 후 둘 다 0 | m2-04.sh 5, 6 | 확인(VM) |
 | 429 root span `queue.rejected=true`, 승인 요청 `queue.wait_ms` (Tempo) | m2-04.sh 7 | 확인(VM) |
@@ -79,10 +82,10 @@
 | 단위 테스트: limiter(즉시 거절, 취소 시 자리 반환, 대기 타임아웃, 상한), 핸들러(413 CL/chunked, 64KB 안쪽, 429 가 executions 미기록, rejected +1, stage queue 10) | VM golang 컨테이너 `go test ./internal/...` (m2-04.sh 9) | 확인(VM) |
 | 배포 직후(`make build deploy` 바로 뒤) m2-04.sh | `m2-04-build2.log` → `m2-04-run2.log` ALL PASS | 확인(VM), 504 없음 |
 
-### backend 메모리 실측 (VM, backend 재시작 후 9MB 를 쥐고 5초 spin 하는 서로 다른 코드 20건 동시: 처리 10(2씩) + 429 10, `m2-04-memprobe.log`)
-- idle 11MB, 실행 중 memory.current 43~63MB, **cgroup memory.peak 70MB**, memory.max 512Mi(변경 전). 재시작 0, OOMKilled 아님. 응답 10 × 200, 10 × 429
-- 기존 limit 512Mi / request 128Mi → **limit 256Mi (peak 의 약 3.8배), request 64Mi**. F-M2-03 표(N=16 232MB)는 동시성 상한이 없을 때의 값이라 더는 해당 없음
-- 새 limit 256Mi 로 PR 직전 전체 검증은 **아직 유효한 결과가 없다** (아래 '최종 실행')
+### 메모리
+- 실측 (VM, backend 재시작 후 9MB 를 쥐고 5초 spin 하는 서로 다른 코드 20건 동시: 처리 10(2씩) + 429 10, `m2-04-memprobe.log`): idle 11MB, 실행 중 memory.current 43~63MB, **memory.peak 70MB**, 재시작 0, OOMKilled 아님
+- **결정: limit 512Mi 유지 (원래 값), request 64Mi.** 근거: 위 실측은 최악 케이스가 아니다 (처리 2건이 둘 다 10MiB 한도까지 쓰면서 큰 wasm 의 compile 응답이 겹치는 조합, 64KB body 10개 동시 버퍼는 측정하지 않았다). backend 가 OOMKill 되면 처리 2 + 대기 8 의 큐 전체가 사라진다. 256Mi 는 peak 의 3.8배였지만 최악을 못 재서 되돌렸다. 최악 케이스 실측은 안 된 것에 남긴다
+- 새 설정(64Mi/512Mi)으로 PR 직전 전체 검증은 아직 유효한 결과가 없다 (아래 '최종 실행')
 
 ### 실행 순서 (정직하게)
 - m2-04.sh 첫 구현 실행(`m2-04-run1.log`) 4건 FAIL: (1) Content-Length 만 크고 본문 없는 요청을 Traefik 경유로 보내면 5초 timeout (Traefik 이 본문을 기다리는 것으로 보이나 원인 확인은 안 함) → 같은 검사를 backend 직접 + Ingress 경유 실제 5MB 로 분리, (2) `send_bg` 가 소요 시간을 안 남겨 429 속도 검사가 오검출 (스크립트 버그), (3)(4) executions 증가량 -48 (위 counter 리셋). 구현 코드는 (3) 때문에 0 초기화만 추가
@@ -90,12 +93,12 @@
 
 ### 최종 실행 (PR 직전 `make clean && make` → `make` → `make verify`, `m2-04-final.log`) — 무효
 - `MAKE1_EXIT=0`, `MAKE2_EXIT=0`. 그러나 실행 도중 다른 세션(F-M3-03)이 같은 `~/lgtm` 에 `rsync --delete` 해서 VM 트리가 바뀌었다: 이후 `make verify` 가 **m2-04 를 건너뛰고**(VERIFY_ALL 에 m2-04 없음, `scripts/verify/m2-04.sh` 없음) m3-03 을 실행해 FAIL(`HANDOFF.md 에 '## F-M3-03 ' 블록 없음`, 그 세션의 파일). `VERIFY_EXIT=2`. 그 앞의 m1-03 ~ m6-03 은 ALL PASS 로 찍혔으나 m2-04 가 포함되지 않았고 backend 코드도 같은 트리 기준인지 보장할 수 없어 m2-04 의 최종 검증으로 치지 않는다
-- 해결: 다른 세션이 VM 을 비운 뒤 `rsync` 로 이 브랜치를 다시 올려 `make clean && make` → `make` → `make verify` 한 번 더. 이 세션이 `pgrep` 로 확인했을 때(시작 시)는 다른 작업이 없었으나 중간에 시작됨
+- 해결: 사용자가 "VM 비었음"이라고 하면 lock(`ssh lgtm-vm 'mkdir ~/.lgtm-vm.lock'`, CLAUDE.md 에 규칙 추가)을 잡고, `rsync` 로 이 브랜치를 다시 올려 `make clean && make` → `make` → `make verify` 한 번 더. 이 세션이 `pgrep` 로 확인했을 때(시작 시)는 다른 작업이 없었으나 중간에 시작됨
 
 ### 안 된 것 / 열린 문제
 - 대기 상한 45초(wait_timeout)에 의한 429 는 단위 테스트(limiter, 50ms 로 축소)만 확인했고 VM 에서 실제 45초를 기다리는 검증은 하지 않았다
 - 클라이언트가 끊었을 때 자리 반환은 "새 요청이 429 가 아니라 큐에 들어감"으로 간접 확인했다. `lgtm_queue_waiting` 값이 8→7 로 줄어드는 것을 직접 관측하지는 않았다 (export 5초 주기)
-- 수동 부하 하나: 20건 동시 요청 중 backend `memory.peak` 70MB. 처리 2건이 모두 10MB 한도를 쓰고 compile 이 겹치는 최악 조합(예: 모두 5MB wasm)은 측정하지 않았다
+- 최악 메모리 조합(처리 2건이 모두 10MiB 한도 + 큰 wasm compile 응답 겹침)은 측정하지 않았다. 실측은 peak 70MB 뿐
 - `queue.wait_ms` 만 root span 에 두고 별도 child span 은 만들지 않았다 (TR-01 구조 유지)
 - PRD 변경은 위 8.2 stage `queue` 1건뿐
 

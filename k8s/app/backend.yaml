@@ -40,11 +40,11 @@ spec:
             periodSeconds: 10
           resources:
             # F-M2-03 실측 (동시 N건이 각각 9MB 를 쥐고 5초 spin, cgroup memory.peak): N=1 27MB / N=4 70MB / N=8 122MB / N=16 232MB.
-            # F-M2-04 로 처리 2 + 대기 8 로 묶임. 실측 (VM arm64, backend 재시작 후 동시 20건 → 처리 10, 429 10):
-            #   idle 11MB, 실행 중 memory.current 43~63MB, memory.peak 70MB (m2-04-memprobe.log). 재시작·OOMKilled 0.
-            #   limit 256Mi = peak 의 약 3.8배 (compile 응답 wasm 버퍼·GC 여유), request 64Mi = idle + 처리 2건분 (peak 근처).
+            # F-M2-04: 처리 2 + 대기 8 로 묶인 뒤 동시 20건 실측 (VM arm64) idle 11MB, memory.current 43~63MB, memory.peak 70MB.
+            #   limit 은 512Mi 유지: 최악 조합(처리 2건이 모두 10MiB 한도 + 큰 wasm compile 응답이 겹침)은 실측하지 않았고,
+            #   OOMKill 이면 큐에 있던 요청 10건이 모두 사라진다. request 64Mi = idle + 처리 2건분 (peak 근처).
             requests: {cpu: 100m, memory: 64Mi}
-            limits: {cpu: 1, memory: 256Mi}
+            limits: {cpu: 1, memory: 512Mi}
 ---
 apiVersion: v1
 kind: Service

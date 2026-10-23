@@ -30,6 +30,7 @@ P_MIMIR=24080
 P_TEMPO=24200
 P_BACKEND=24081
 TMP="$(mktemp -d)"
+T_START="$(date +%s)"
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-pf.sh"
 PF_LOG_DIR="$TMP"
@@ -98,16 +99,18 @@ mq() {
 		| pyj "d['data']['result'][0]['value'][1]"
 }
 mval() { local v; v="$(mq "$1")"; echo "${v:-0}"; }
-# poll_eq <설명> <쿼리> <기준값> <기대 증가량> : export(5초)·remote write 를 감안해 최대 45초 폴링
-poll_delta() {
-	local what="$1" q="$2" base="$3" want="$4" i cur d=""
+# poll_increase <설명> <counter 이름> <기대 증가량> : sum(increase(<counter>[스크립트 시작 후 경과+15s])). 최대 45초 폴링
+# raw 값의 차이(sum 끝값 - 시작값)는 rollout 으로 counter 가 리셋되면 이전 pod 값 때문에 틀린다 (F-M2-04 에서 -48 이 나온 방식). increase() 는 리셋을 보정한다
+# increase() 는 구간 끝을 외삽하므로 정수로 반올림한다. 0 초기화(execute.InitMetrics)가 있어야 series 의 첫 증가분을 놓치지 않는다
+poll_increase() {
+	local what="$1" counter="$2" want="$3" i d="" w
 	for i in $(seq 1 15); do
-		cur="$(mval "$q")"
-		d="$(python3 -I -c 'import sys; print(int(round(float(sys.argv[2])-float(sys.argv[1]))))' "$base" "$cur")"
+		w=$(( $(date +%s) - T_START + 15 ))
+		d="$(mval "increase(${counter}[${w}s])" | python3 -I -c 'import sys; print(int(round(float(sys.stdin.read() or 0))))')"
 		[ "$d" = "$want" ] && break
 		sleep 3
 	done
-	[ "$d" = "$want" ] && pass "$what 증가량 = $want" || fail "$what 증가량 = '$d' (기대 $want, 기준 $base)"
+	[ "$d" = "$want" ] && pass "$what 증가량 = $want (increase)" || fail "$what increase() = '$d' (기대 $want)"
 }
 
 # ---- 0. 전제 ----
@@ -120,12 +123,8 @@ done
 [ "$ready" = "true" ] && pass "backend pod 1개, Ready" || fail "backend pod Ready 아님 (pods='${lines}')"
 pf_forward observability mimir "$P_MIMIR:8080" || fail "port-forward (mimir) 실패"
 pf_forward observability tempo "$P_TEMPO:3200" || fail "port-forward (tempo) 실패"
-info "이전 export 가 가라앉도록 8초 대기 후 기준값 측정"
+info "pod 의 0 초기화 series 가 export 되도록 8초 대기"
 sleep 8
-R0="$(mval lgtm_queue_rejected_total)"
-E0="$(mval lgtm_executions_total)"
-info "기준값: rejected=$R0 executions=$E0"
-
 # ---- 1. 65KB body → 413, 응답이 짧음 ----
 mkreq big "// $(head -c 66000 /dev/zero | tr '\0' 'a')
 fn main() { println!(\"hi\"); }"
@@ -217,8 +216,9 @@ done
 [ "$n429" -gt 0 ] && [ "$fast" = 0 ] && pass "429 는 모두 즉시(< 3s) 반환, status=queue_full" || fail "429 중 느리거나 status 가 다른 것 ${fast}건 (예: $(head -c 200 "$TMP/${first429:-b1}.json"))"
 
 # ---- 6. Mimir: rejected +10, executions +11 (ok 1 + burst 10; 413/429/400 제외), stage="queue" +11 ----
-poll_delta "lgtm_queue_rejected_total" lgtm_queue_rejected_total "$R0" 10
-poll_delta "lgtm_executions_total" lgtm_executions_total "$E0" 11
+poll_increase "lgtm_queue_rejected_total (429 burst)" lgtm_queue_rejected_total 10
+# 기대 11 = 60KB 정상 요청 1 (success) + burst 중 처리된 10 (timeout). 제외: 413 (65KB, 5MB), 400 (깨진 JSON), 429 10건 — 실행이 시작되지 않음
+poll_increase "lgtm_executions_total (60KB 정상 1 + burst 처리 10; 413/400/429 제외)" lgtm_executions_total 11
 # stage="queue" 는 승인된 요청마다 기록된다 (대기 0 도). 같은 pod 에서 compile 도 승인된 요청마다 정확히 한 번이므로 count 가 같아야 한다
 # (rollout 으로 counter 가 리셋돼도 성립하는 불변식이라 기준값 차이 대신 쓴다)
 for i in $(seq 1 15); do
@@ -300,7 +300,18 @@ wait "${BG_PIDS[@]}" 2>/dev/null
 n=0; for i in 1 2 4 5 6 7 8 9 10; do [ "$(code_of "c$i")" = 200 ] && n=$((n + 1)); done
 [ "$n" = 9 ] && pass "끊기지 않은 처리/대기 9건 모두 HTTP 200" || fail "끊기지 않은 9건 중 200 = $n건"
 
-# ---- 9. 단위 테스트 (limiter, 413/429 핸들러; cgo: golang 이미지에 gcc 포함) ----
+# ---- 9. 부하 종료 후 15초 안에 gauge 가 0 으로 돌아온다 (Mimir) ----
+T_LOAD_END="$(now_s)"
+a=""; w=""
+for i in $(seq 1 8); do
+	a="$(mval lgtm_queue_active)"; w="$(mval lgtm_queue_waiting)"
+	[ "$a" = 0 ] && [ "$w" = 0 ] && break
+	sleep 2
+done
+el="$(elapsed "$T_LOAD_END" "$(now_s)")"
+[ "$a" = 0 ] && [ "$w" = 0 ] && num_between "$el" 0 15 && pass "부하 종료 후 ${el}s 안에 lgtm_queue_active=0, lgtm_queue_waiting=0" || fail "부하 종료 후 ${el}s: active='$a' waiting='$w' (기대 15초 안에 0, 0)"
+
+# ---- 10. 단위 테스트 (limiter, 413/429 핸들러; cgo: golang 이미지에 gcc 포함) ----
 if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
 	golang:1.27.3-trixie go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
 	pass "go test ./internal/... (limiter, 413/429 핸들러 포함) 통과"
