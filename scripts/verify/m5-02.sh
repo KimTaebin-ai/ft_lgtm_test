@@ -201,7 +201,7 @@ elif mode == "edit":
     out(bool(d2) and d2["dashboard"].get("title") == d["dashboard"].get("title"), "수정/삭제 시도 뒤에도 title 이 파일 그대로")
 PY
 gpy() { python3 -I "$TMP/gpy.py" "$@"; }
-# gpy 모드 출력(OK:/NG:)을 pass/fail 로 바꾼다
+# gpy 모드 출력(OK:/NG:)을 pass/fail 로 바꾼다. fails 카운터가 부모 shell 에 남도록 파이프(subshell)가 아니라 relay < <(...) 로 호출한다
 relay() {
 	local line
 	while IFS= read -r line; do
@@ -253,16 +253,21 @@ if [ "$rc" = 1 ] && grep -q "no-such-uid-m5-02" "$TMP/wd2.out"; then pass "wait-
 mkreq ok 'fn main() { println!("hi"); }'
 mkreq ce 'fn main() { let x = undefined_ident_m502; }'
 mkreq ex 'fn main() { std::process::exit(3); }'
+# 새 클러스터에서는 histogram series 의 첫 sample 만 있어 rate()/histogram_quantile 이 NaN 이다 (Prometheus 의 새 series 맹점).
+# 증가분이 rate 구간 안에 두 sample 이상 걸리도록 부하를 20초 간격으로 두 번 보낸다.
 bad=0
-for i in 1 2 3 4 5; do [ "$(send ok)" = 200 ] || bad=$((bad + 1)); done
-for i in 1 2; do [ "$(send ce)" = 200 ] || bad=$((bad + 1)); done
-[ "$(send ex)" = 200 ] || bad=$((bad + 1))
-[ "$bad" = 0 ] && pass "부하 8건 전송 (HTTP 200)" || fail "부하 요청 ${bad}건이 HTTP 200 아님"
-info "export(5초) + collector batch 반영을 위해 15초 대기"
-sleep 15
+for round in 1 2; do
+	for i in 1 2 3 4 5; do [ "$(send ok)" = 200 ] || bad=$((bad + 1)); done
+	for i in 1 2; do [ "$(send ce)" = 200 ] || bad=$((bad + 1)); done
+	[ "$(send ex)" = 200 ] || bad=$((bad + 1))
+	[ "$round" = 1 ] && { info "rate() 가 증가분을 볼 수 있도록 20초 뒤 부하를 한 번 더 보냄"; sleep 20; }
+done
+[ "$bad" = 0 ] && pass "부하 16건 전송 (2회, HTTP 200)" || fail "부하 요청 ${bad}건이 HTTP 200 아님"
+info "export(5초) + collector batch 반영을 위해 20초 대기"
+sleep 20
 
 # ---- 3. dashboard 존재 / refresh / 모든 패널 쿼리 / 필수 3개 / exemplar ----
-gpy check 2>"$TMP/check.err" | relay
+relay < <(gpy check 2>"$TMP/check.err")
 [ -s "$TMP/check.err" ] && cat "$TMP/check.err" >&2
 
 # ---- 4. backend 재시작 후에도 필수 3개 값이 줄지 않는다 ----
@@ -271,7 +276,10 @@ info "재시작 전 성공/실패/전체 = $B1 / $B2 / $B3"
 k -n lgtm rollout restart deploy/backend >/dev/null 2>&1
 k -n lgtm rollout status deploy/backend --timeout=180s >/dev/null 2>&1 && bash scripts/wait-backend.sh 60 >/dev/null 2>&1 && pass "backend 재시작 후 Ready, ingress 연결" || fail "backend 재시작 후 Ready/ingress 확인 실패"
 bad=0
-for i in 1 2 3; do [ "$(send ok)" = 200 ] || bad=$((bad + 1)); done
+for i in 1 2 3; do
+	c="$(send ok)"
+	[ "$c" = 200 ] || { bad=$((bad + 1)); info "재시작 후 요청 $i: HTTP $c 본문='$(head -c 200 "$TMP/ok.json")'"; k -n lgtm get pods -l app=backend -o wide >&2; k -n kube-system logs deploy/traefik --since=60s --tail=15 >&2; }
+done
 [ "$bad" = 0 ] && pass "재시작 후 요청 3건 HTTP 200" || fail "재시작 후 요청 ${bad}건 실패"
 A1=none; A2=none; A3=none
 for i in $(seq 1 12); do
@@ -282,7 +290,7 @@ b=float(sys.argv[1]); a=sys.argv[2]
 sys.exit(0 if a!="none" and float(a) > b + 1 else 1)' "${B3:-0}" "$A3" 2>/dev/null && break
 done
 info "재시작 후 성공/실패/전체 = $A1 / $A2 / $A3"
-python3 -I - "$B1" "$B2" "$B3" "$A1" "$A2" "$A3" <<'PY' | relay
+relay < <(python3 -I - "$B1" "$B2" "$B3" "$A1" "$A2" "$A3" <<'PY'
 import sys
 def f(x):
     try: return float(x)
@@ -295,10 +303,11 @@ for n, x, y in zip(names, b, a):
     print(("OK" if y >= 0 and y > 0 and y >= x - 0.5 else "NG") + ": 재시작 후 %s 패널 %.2f -> %.2f (음수/0/감소 아님)" % (n, x, y))
 print(("OK" if a[2] > b[2] + 1 else "NG") + ": 재시작 후 새 요청이 전체에 반영 (%.2f -> %.2f)" % (b[2], a[2]))
 PY
+)
 
 # ---- 5. UI/API 수정·삭제 거부, Grafana pod 를 지워도 파일 기준으로 복원 ----
 T0="$(gpy title)"
-gpy edit | relay
+relay < <(gpy edit)
 k -n observability delete pod -l app=grafana --wait=true >/dev/null 2>&1
 k -n observability rollout status deploy/grafana --timeout=180s >/dev/null 2>&1 && bash scripts/wait-ingress.sh 60 grafana.lgtm.local/api/health >/dev/null 2>&1 && pass "Grafana pod 삭제 후 Ready, ingress 연결" || fail "Grafana pod 삭제 후 Ready/ingress 확인 실패"
 T1=""
