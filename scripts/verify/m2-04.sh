@@ -99,6 +99,12 @@ mq() {
 		| pyj "d['data']['result'][0]['value'][1]"
 }
 mval() { local v; v="$(mq "$1")"; echo "${v:-0}"; }
+# mval_at <식> <epoch> : 그 시각의 instant query 합계 (없으면 0)
+mval_at() {
+	local v
+	v="$(curl -s --max-time 15 -G "http://127.0.0.1:$P_MIMIR/prometheus/api/v1/query" --data-urlencode "query=sum($1)" --data-urlencode "time=$2" | pyj "d['data']['result'][0]['value'][1]")"
+	echo "${v:-0}"
+}
 # wait_stable : lgtm_executions_total 합계와 lgtm_queue_rejected_total 합계가 10초 간격 두 번 같을 때까지 기다린다 (상한 60초).
 # 직전 스크립트의 요청은 5초 reader 주기 + collector batch 때문에 늦게 Mimir 에 들어온다. 안정되기 전에 구간을 잡으면
 # 그 요청이 이번 increase() 구간에 섞인다 (F-M5-01 전체 verify 에서 m2-03 직후 실행 시 12 ≠ 11).
@@ -124,11 +130,29 @@ poll_increase() {
 	wait_stable || info "$what: 끝값이 60초 안에 안정되지 않음 (마지막 읽기 사용)"
 	for i in 1 2 3; do
 		w=$(( $(date +%s) - T_BASE + 5 ))
-		d="$(mval "increase(${counter}[${w}s])" | python3 -I -c 'import sys; print(int(round(float(sys.stdin.read() or 0))))')"
+		# 정확한 증가량 = 지금 합계 - 기준 시각 합계. increase() 는 구간 가장자리로 외삽해서 정수 11 이 11.8 로 읽히고 12 로 반올림됐다 (F-M6-04 진단: timeout 10.71 + success 1.07).
+		# 구간에 counter reset 이 있으면 raw 차이가 틀리므로 그때만 increase() 를 쓴다
+		if [ "$(mval "resets(${counter}[${w}s])" | python3 -I -c 'import sys; print(int(float(sys.stdin.read() or 0)))')" = 0 ]; then
+			d="$(python3 -I -c 'import sys; print(int(round(float(sys.argv[1]) - float(sys.argv[2]))))' "$(mval "$counter")" "$(mval_at "$counter" "$T_BASE")")"
+		else
+			d="$(mval "increase(${counter}[${w}s])" | python3 -I -c 'import sys; print(int(round(float(sys.stdin.read() or 0))))')"
+		fi
 		[ "$d" = "$want" ] && break
 		sleep 3
 	done
-	[ "$d" = "$want" ] && pass "$what 증가량 = $want (increase, 안정 후)" || fail "$what increase() = '$d' (기대 $want)"
+	if [ "$d" = "$want" ]; then
+		pass "$what 증가량 = $want (increase, 안정 후)"
+	else
+		fail "$what increase() = '$d' (기대 $want)"
+		# 진단: 어느 status 가 더 들어왔는지 (F-M6-04)
+		w=$(( $(date +%s) - T_BASE + 5 ))
+		info "DIAG ${counter} 구간 ${w}s status 별: $(curl -s --max-time 15 -G "http://127.0.0.1:$P_MIMIR/prometheus/api/v1/query" --data-urlencode "query=sum by (status) (increase(${counter}[${w}s]))" \
+			| python3 -I -c 'import json,sys
+try:
+    print({r["metric"].get("status","-"): round(float(r["value"][1]),2) for r in json.load(sys.stdin)["data"]["result"]})
+except Exception as e:
+    print("파싱 실패", e)')"
+	fi
 }
 
 # ---- 0. 전제 ----

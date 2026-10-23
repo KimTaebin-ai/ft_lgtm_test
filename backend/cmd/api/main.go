@@ -78,7 +78,8 @@ func run() error {
 	case err = <-errCh:
 	case <-ctx.Done():
 		log.InfoContext(context.Background(), "shutdown signal received")
-		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// 큐 대기 상한(execute.maxQueueWait 45s) + 처리(loop {} ≈ 5.5s, Kubo 장애 시 ≈ 15s)까지 기다린다. k8s grace 75s = preStop 10s + 60s + 여유.
+		sctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		err = srv.Shutdown(sctx)
 	}

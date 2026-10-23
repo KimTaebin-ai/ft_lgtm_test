@@ -14,6 +14,8 @@ spec:
       labels: {app: backend}
     spec:
       automountServiceAccountToken: false
+      # F-M6-04: 종료 시 preStop 10s (Traefik 이 endpoint 제거를 반영할 시간) + Shutdown 상한 60s (cmd/api/main.go) + 여유 = 75s.
+      terminationGracePeriodSeconds: 75
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -32,6 +34,9 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+          lifecycle:
+            # F-M6-04: SIGTERM 전에 10초 더 요청을 받는다. rollout 직후 Traefik 이 이미 사라진 pod IP 로 보내 30초 뒤 504 가 났다 (m6-04 타임라인).
+            preStop: {sleep: {seconds: 10}}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5

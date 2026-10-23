@@ -253,12 +253,14 @@ To show a working public fetch in a defence you need a network where the router 
 
 Iterating after a code change: `make build deploy` is enough; `make clean && make` is only for a from-scratch check.
 
+**Rolling restarts.** Right after a rollout, requests used to hang for exactly 30 s and end in a `504`: Traefik was slow to drop the old pod's endpoint, so it kept sending requests to a terminating pod whose SYN packets were discarded. The backend and frontend pods now have a 10 s `preStop` sleep (and the backend a longer termination grace period and shutdown limit), so the old pod keeps serving until Traefik has caught up. `scripts/verify/m6-04.sh` restarts each deployment while sending requests and requires zero non-200 responses; it passed twice after the fix. The upper bound of Traefik's delay was not measured (10 s is a margin), and replicas above 1 or a heavily loaded node were not tested.
+
 ## Known limitations
 
 - **NAT / public gateways:** see [IPFS and NAT](#ipfs-and-nat). Public IPFS access is not available behind NAT without port forwarding, and `ipfs.io` no longer answers plain HTTP requests.
 - **A new cluster shows `NaN` / empty p95 panels at first:** `rate()` needs at least two samples per histogram series, so the panels fill in after a second batch of requests (about 20 seconds later).
 - **Longest duration panel lags** by roughly 50 seconds (TraceQL metrics, one measurement).
-- **Stability right after a deploy, and a full `make verify` pass:** 【F-M6-04 결과】
+- **Full `make verify` on a fresh VM:** not yet confirmed as one run; it is planned for F-M6-02. The checks have so far been run per feature.
 - First `make` needs internet access to pull images and packages; image pulls are retried (`scripts/prefetch-images.sh`).
 
 ## Resources

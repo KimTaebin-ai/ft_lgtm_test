@@ -24,23 +24,61 @@
 
 ### 된 것 / 안 된 것
 - 검증표 참고.
-- 남은 자리표시: `【login】` 은 `taebkim` 으로 교체됨, `【F-M6-04 결과】`(Known limitations 1줄, 배포 직후 504 와 `make verify` 전체 통과 여부를 한 자리표시로 합침), `【사람이 직접 한 작업·검토 범위】` 는 사용자 제공 문단으로 교체됨(Use of AI 의 "What the author did", git 으로 확인 불가라고 README 에 표시).
+- 남은 자리표시: `【login】` 은 `taebkim` 으로 교체됨, `【F-M6-04 결과】` 는 F-M6-04 블록 기준으로 채움(배포 직후 504 는 해소로 Make targets 아래 "Rolling restarts" 한 단락으로 이동, `make verify` 전체는 F-M6-02 에서 확인 예정이라 Known limitations 에 1줄), `【사람이 직접 한 작업·검토 범위】` 는 사용자 제공 문단으로 교체됨(Use of AI 의 "What the author did", git 으로 확인 불가라고 README 에 표시).
 - README 의 "호스트 PC 접속" 은 옵션 안내이며 verify 대상이 아니다. 사용자 확인: Mac 에서 UTM Shared VM IP(192.168.64.x)로 ssh 접속됨. 호스트 브라우저 접속(호스트 /etc/hosts 수정)은 확인하지 않았고 README 에 그렇게 적었다.
 - 이미지/버전 번호가 바뀌면 README Technical choices 표도 고쳐야 한다(m6-01.sh 가 불일치를 FAIL 로 잡는다).
 
 ### 다음 단계
-- F-M6-04 결과로 `【F-M6-04 결과】` 채우기. HANDOFF.md / Makefile `VERIFY_ALL` conflict 는 나중에 merge 되는 쪽이 양쪽 항목을 모두 남긴다.
-- 사용자: `【login】`, `【사람이 직접 한 작업·검토 범위】` 채우기.
+- F-M6-02 에서 `make verify` 전체를 확인한 뒤 README Known limitations 의 해당 줄을 갱신.
+- origin/main(F-M6-04) merge 완료: Makefile `VERIFY_ALL` 에 `m6-04 m6-01` 둘 다, HANDOFF 에 두 블록 모두 남김.
 
 ### 검증표
 | 주장 | 확인 방법 | 결과 |
 |---|---|---|
 | README 없이 m6-01.sh 는 실패하는 상태로 먼저 커밋 | 커밋 7129ab7 (스크립트는 README 없으면 `FAIL: README.md 없음` 후 exit 1) | 코드로 확인(실행은 안 함) |
 | m6-01.sh ALL PASS: 첫 줄 문구, 필수 섹션 3개 + `### Use of AI`, README 의 make 타겟이 Makefile 에 존재, 저장소 경로/링크 존재(`docs/evidence/` 포함), 버전이 images.txt / Makefile / go.mod / package.json 과 일치 | VM `lgtm-vm` 에서 `bash scripts/verify/m6-01.sh` 1회, 로그 `~/lgtm-logs/m6-01-verify.log` | 확인(VM): exit 0, PASS 52건, FAIL 0, `m6-01: ALL PASS` |
-| 남은 자리표시 3개 | 같은 로그 INFO | `【login】`, `【F-M6-04 결과】`, `【사람이 직접 한 작업·검토 범위】` |
+| 남은 자리표시 3개 | 같은 로그 INFO | 이 시점(merge 전) 3개. 이후 모두 채워 0개 (아래 merge 후 행) |
 | README 의 URL 3개와 make 명령이 실제와 일치 | URL 은 `scripts/hosts.sh` 의 host 3개와 `k8s/app/frontend.yaml` ingress host 대조, make 명령은 m6-01.sh 3번 검사 | URL: 사람이 대조(스크립트는 URL 을 검사하지 않음). make: 확인(VM) |
 | README 의 숫자(93 / 89 / 4 / 21) | `git log 4d34bde --no-merges` / `--merges` + `grep -c '^Co-Authored-By: Claude'` | 확인(macOS 의 git 명령 출력. 저장소 이력이라 호스트 무관) |
 | `make verify` 전체 | 실행 안 함: 이 피처는 문서 + verify 목록 추가뿐. VM 에서는 m6-01 만 1회 | 해당 없음 |
+| origin/main(F-M6-04) merge 후 m6-01.sh ALL PASS, 자리표시 0개 | VM `bash scripts/verify/m6-01.sh`, 로그 `~/lgtm-logs/m6-01-verify3.log` | 확인(VM): exit 0, PASS 52건. 같은 날 첫 실행(`m6-01-verify2.log`)은 README 의 `192.168.64.x` 를 버전 `192.168.64` 로 오인해 FAIL 1건 → 스크립트의 버전 정규식이 `.x` 뒤를 제외하도록 수정 후 재실행 통과 |
+| Makefile `VERIFY_ALL` 에 m6-04 와 m6-01 둘 다, HANDOFF 에 두 블록 | merge conflict 해결 후 `grep` / 파일 확인 | 확인(macOS 파일 내용) |
+
+## F-M6-04 stability (브랜치 feat/m6-04-stability)
+
+### 한 일
+- `scripts/verify/m6-04.sh`(신규, 먼저 실패 상태로 커밋 28150e2) + Makefile VERIFY_ALL 끝에 `m6-04`. backend/compiler 는 rollout restart 중 POST /api/execute 60건(1초 간격, HTTP 200 + status=success), frontend 는 GET 30건. backend 는 재시작 때 처리 중이던 loop {} 1건이 끝까지 완료(200, timeout)되는지도 본다. 실패 시 pod/endpoint 타임라인 + 이벤트를 DIAG 로 출력. 백그라운드 타임라인 루프를 `wait` 하다 19분 멈추던 버그를 고쳤다(REQ_PIDS 만 wait, BG_PIDS 는 종료 때 kill).
+- `k8s/app/backend.yaml`, `frontend.yaml`: `lifecycle.preStop.sleep.seconds: 10`. backend `terminationGracePeriodSeconds: 75`, frontend 30.
+- `backend/cmd/api/main.go`: SIGTERM 후 `srv.Shutdown` 상한 10s → 60s (큐 대기 상한 45s + 처리 ≈ 15s). 큐 크기·timeout·대기 상한 값은 바꾸지 않았다.
+- `scripts/verify/m2-04.sh`: increase() 불일치 시 `sum by (status)` 진단 출력 추가, 증가량 계산을 "현재 합계 - 기준 시각(T_BASE) 합계" 로 변경(구간에 counter reset 이 있으면 기존 increase()).
+
+### 원인
+1. **재시작 직후 504 (PRD 12장)**: Traefik 이 endpoint 제거를 늦게 반영해, 종료 중이거나 이미 사라진 old pod IP 로 요청을 보낸다. 연결 거부(502)가 아니라 SYN 이 버려져 정확히 30초 뒤 504 로 끝났다. 수정 전 m6-04 타임라인: backend r12(요청 시각이 old pod deletionTimestamp 직후), frontend r7(endpoint ready=false 로 바뀐 바로 그 시점) 이 각각 time_total 30.0s 504. "새 pod 가 Ready 전에 요청을 받음" 은 아니었다(새 pod 는 ready=true 가 된 뒤). compiler 는 Traefik 을 거치지 않아(ClusterIP) 수정 전에도 60건 통과라 변경하지 않았다.
+2. **m2-04 executions 12/11**: 실행이 하나 더 들어온 것이 아니다. 진단 출력이 `timeout 10.71 + success 1.07 = 11.78`(rejected 도 10 → 11.27)로, 실제 증가 11 을 `increase()` 가 구간 가장자리로 외삽한 값이었고 11.5 를 넘으면 반올림해 12 가 됐다. 간헐이었던 것은 외삽 크기가 11.5 경계 근처였기 때문이다. 처음 가설("대기 중 끊김" 요청이 슬롯에서 실행됨)은 아니다: 그 검사(섹션 8)는 executions 검사(섹션 6) 뒤에 실행된다. 이전 HANDOFF(F-M5-03)의 `internal_error` 1건 귀속 불가 기록은 이 원인과 무관해 보이지만 확인하지 못했다.
+
+### 된 것 (VM Debian 13, ssh lgtm-vm, 실제 실행)
+- m6-04.sh: 수정 전 FAIL(backend 1/60, frontend 1/30 이 504 30s) → 수정 후 2회 연속 ALL PASS.
+- m2-03 → m2-04: 수정 후 3회 연속 PASS. (수정 전에는 3회 모두 FAIL, 진단으로 원인 확인.)
+- m5-02, m2-01: 각 1회 ALL PASS.
+- PRD 12장 리스크(배포 직후 첫 요청 504): **해소로 본다.** 단 m6-04 2회 PASS 기준이고 Traefik 반영 지연의 상한은 측정하지 않았다(preStop 10s 는 여유값). 확인한 범위 밖: replicas 2 이상, 노드 부하가 큰 상황.
+
+### 검증표
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 수정 전 rollout 중 504 재현 | `bash scripts/verify/m6-04.sh` (수정 전 코드) | 확인됨: backend r12, frontend r7 504 (30.0s), compiler 60/60 통과 |
+| 수정 후 non-200 0건 | m6-04.sh 2회 | 확인됨: ALL PASS ×2 |
+| m2-04 원인은 외삽 | 진단 출력 `sum by (status)(increase(...))` | 확인됨: 합계 11.78 (실제 11) |
+| m2-04 수정 | m2-03 → m2-04 ×3 | 확인됨: 6회 모두 rc=0 |
+| 영향받는 verify | m5-02, m2-01 각 1회 | 확인됨: ALL PASS |
+| 전체 verify | 미실행 | **미실행, 이유: F-M6-02 에서 실행. 영향받는 verify: m6-04, m2-03, m2-04, m5-02, m2-01** |
+
+### 안 된 것
+- `make verify` 전체는 실행하지 않았다(다음 피처 F-M6-02 가 새 VM 에서 전체 실행). 완료 기준의 전체 exit 0 은 여기서 확인하지 않았다.
+- README.md 의 【F-M6-04 결과】: origin/main 에 F-M6-01 이 merge 되어 있지 않고 README.md 도 없어 채우지 않았다.
+- compiler 쪽 SIGTERM/preStop 은 수정 전 통과해서 손대지 않았다. keep-alive 가 끊기는 상황이 간헐적으로 나타나면 추가 필요.
+
+### 다음 단계
+- F-M6-01 merge 후 README 【F-M6-04 결과】 채우기, F-M6-02 에서 `make verify` 전체 확인.
 
 ## F-M5-03 dashboard-traces (브랜치 feat/m5-03-dashboard-traces)
 
