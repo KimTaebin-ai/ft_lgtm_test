@@ -128,7 +128,19 @@ poll_increase() {
 		[ "$d" = "$want" ] && break
 		sleep 3
 	done
-	[ "$d" = "$want" ] && pass "$what 증가량 = $want (increase, 안정 후)" || fail "$what increase() = '$d' (기대 $want)"
+	if [ "$d" = "$want" ]; then
+		pass "$what 증가량 = $want (increase, 안정 후)"
+	else
+		fail "$what increase() = '$d' (기대 $want)"
+		# 진단: 어느 status 가 더 들어왔는지 (F-M6-04)
+		w=$(( $(date +%s) - T_BASE + 5 ))
+		info "DIAG ${counter} 구간 ${w}s status 별: $(curl -s --max-time 15 -G "http://127.0.0.1:$P_MIMIR/prometheus/api/v1/query" --data-urlencode "query=sum by (status) (increase(${counter}[${w}s]))" \
+			| python3 -I -c 'import json,sys
+try:
+    print({r["metric"].get("status","-"): round(float(r["value"][1]),2) for r in json.load(sys.stdin)["data"]["result"]})
+except Exception as e:
+    print("파싱 실패", e)')"
+	fi
 }
 
 # ---- 0. 전제 ----
