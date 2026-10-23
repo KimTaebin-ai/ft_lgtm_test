@@ -14,6 +14,7 @@ import (
 //	lgtm_executions          → lgtm_executions_total
 //	lgtm_execution_duration  → lgtm_execution_duration_seconds_{bucket,sum,count}
 //	lgtm_stage_duration      → lgtm_stage_duration_seconds_{bucket,sum,count}
+//	lgtm_output              → lgtm_output_bytes_{bucket,sum,count} (unit "By")
 //	lgtm_queue_rejected      → lgtm_queue_rejected_total
 //	lgtm_queue_active        → lgtm_queue_active (gauge, 처리 중)
 //	lgtm_queue_waiting       → lgtm_queue_waiting (gauge, 대기 중)
@@ -21,6 +22,7 @@ const (
 	MetricExecutions        = "lgtm_executions"
 	MetricExecutionDuration = "lgtm_execution_duration"
 	MetricStageDuration     = "lgtm_stage_duration"
+	MetricOutput            = "lgtm_output"
 	MetricQueueRejected     = "lgtm_queue_rejected"
 	MetricQueueActive       = "lgtm_queue_active"
 	MetricQueueWaiting      = "lgtm_queue_waiting"
@@ -29,11 +31,16 @@ const (
 // DurationBuckets는 PRD 8.2: 5초 limit 근처를 촘촘하게. 두 histogram이 공통으로 쓴다.
 var DurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 4.5, 5, 5.5, 10, 20}
 
+// OutputBuckets는 lgtm_output_bytes의 bucket이다 (PRD 8.2 "권장" 항목이라 수치는 PRD에 없다).
+// stdout+stderr 합계 상한이 10kB(10240)라 상한이 별도 경계가 되도록 했다. 잘린 출력은 le=10240에 모인다.
+var OutputBuckets = []float64{128, 512, 1024, 2048, 4096, 8192, 10240, 16384}
+
 // Metrics는 PRD 8.2 instrument 묶음. label에는 CID/hash 같은 high-cardinality 값을 넣지 않는다.
 type Metrics struct {
 	executions metric.Int64Counter
 	execDur    metric.Float64Histogram
 	stageDur   metric.Float64Histogram
+	output     metric.Int64Histogram
 	rejected   metric.Int64Counter
 	meter      metric.Meter
 }
@@ -60,13 +67,20 @@ func NewMetrics(mp metric.MeterProvider) (*Metrics, error) {
 	if err != nil {
 		return nil, err
 	}
+	output, err := m.Int64Histogram(MetricOutput,
+		metric.WithUnit("By"),
+		metric.WithDescription("실행 출력(stdout+stderr) 바이트 수. 실행이 끝난 요청만 기록한다"),
+		metric.WithExplicitBucketBoundaries(OutputBuckets...))
+	if err != nil {
+		return nil, err
+	}
 	rejected, err := m.Int64Counter(MetricQueueRejected,
 		metric.WithUnit("{request}"),
 		metric.WithDescription("대기열이 가득 차거나 대기 상한 시간을 넘겨 429로 거절된 요청 수"))
 	if err != nil {
 		return nil, err
 	}
-	return &Metrics{executions: executions, execDur: execDur, stageDur: stageDur, rejected: rejected, meter: m}, nil
+	return &Metrics{executions: executions, execDur: execDur, stageDur: stageDur, output: output, rejected: rejected, meter: m}, nil
 }
 
 // InitSeries는 counter series를 0으로 만들어 둔다. 새 process의 첫 export부터 모든 status series가 0에서 시작하므로
@@ -117,3 +131,6 @@ func (m *Metrics) RecordExecution(ctx context.Context, status, language string, 
 func (m *Metrics) RecordStage(ctx context.Context, stage string, d time.Duration) {
 	m.stageDur.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("stage", stage)))
 }
+
+// RecordOutput은 실행 출력(stdout+stderr) 바이트 수를 기록한다. label 없음. ctx는 root ctx (exemplar).
+func (m *Metrics) RecordOutput(ctx context.Context, bytes int) { m.output.Record(ctx, int64(bytes)) }
