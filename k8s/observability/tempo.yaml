@@ -1,5 +1,8 @@
-# F-M1-01 Tempo. monolithic, local storage, OTLP receiver. metrics-generator/local_blocks 는 F-M5-03.
+# F-M1-01 Tempo. monolithic, local storage, OTLP receiver.
 # 3.x 에서는 ingester/compactor 블록이 없고 monolithic 은 Kafka 가 필요 없다.
+# local_blocks processor 는 3.0 에서 제거됐다. TraceQL metrics(max_over_time(duration) 등)는 live-store 와 RF1 블록을
+# 읽으므로 metrics-generator/local_blocks 설정 없이 이 설정 그대로 동작한다 (F-M5-03 spike 에서 VM 실측, Dashboard 2 Longest 패널).
+# 이 주석은 ConfigMap data 블록 밖에 둔다 (주석만 바꿔도 tempo-config 내용이 바뀌어 Tempo 가 재시작되지 않도록).
 # 근거: https://grafana.com/docs/tempo/v3.1.x/set-up-for-tracing/setup-tempo/migrate-to-3/
 apiVersion: v1
 kind: ConfigMap
