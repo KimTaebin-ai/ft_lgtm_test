@@ -41,3 +41,4 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 개발 반복 중 make clean 금지. make 또는 make build deploy로 갱신. make clean && make와 make verify 전체는 PR 직전 1회
 - 반복 중 검증은 이번 피처의 verify 스크립트만
 - 원인 불명 간헐 실패는 정보 수집 1회 후 HANDOFF에 기록하고 진행. 재현 시도를 반복하지 않는다
+- VM 작업(rsync, make, verify) 전에 `ssh lgtm-vm 'mkdir ~/.lgtm-vm.lock'`으로 lock을 잡고, 실패하면 다른 세션이 사용 중이므로 멈추고 보고한다. 끝나면 `rmdir ~/.lgtm-vm.lock`
