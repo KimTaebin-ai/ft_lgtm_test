@@ -91,6 +91,10 @@ func newServerFor(t *testing.T, compilerURL string) (*httptest.Server, *tracetes
 }
 
 func newServerWithExec(t *testing.T, compilerURL string, ex Executor) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
+	return newServerWithUploader(t, compilerURL, ex, &fakeUploader{})
+}
+
+func newServerWithUploader(t *testing.T, compilerURL string, ex Executor, up Uploader) (*httptest.Server, *tracetest.SpanRecorder, *sdkmetric.ManualReader) {
 	t.Helper()
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
@@ -99,7 +103,7 @@ func newServerWithExec(t *testing.T, compilerURL string, ex Executor) (*httptest
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL, ex, NewLimiter()))
+	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL, ex, up, NewLimiter()))
 	t.Cleanup(srv.Close)
 	return srv, rec, reader
 }

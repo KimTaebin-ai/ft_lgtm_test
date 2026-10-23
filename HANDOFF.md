@@ -10,6 +10,55 @@
 ### 다음 단계
 -->
 
+## F-M3-02 ipfs-upload (브랜치 feat/m3-02-ipfs-upload)
+
+### 한 일
+- `backend/internal/ipfs/client.go`(신규): Kubo `POST /api/v0/add?wrap-with-directory=true&cid-version=1&raw-leaves=true&pin=true`. multipart 파트 이름 고정 3개, 응답은 줄 단위 JSON(실측 확인: 파일별 1줄 + `Name:""` 디렉토리 줄, Size 는 문자열), 3개 파일 엔트리와 디렉토리 CID 모두 있어야 성공. **keep-alive 끔** (아래 발견)
+- `backend/internal/execute/files.go`(신규): 업로드 파일 3개. `main.rs`=코드 원문, `output.txt`=`--- stdout ---` / `--- stderr ---` 구분(+ truncated 면 마지막 줄 `--- truncated: output exceeded 10240 bytes ---`), `status.json`=고정 key 순서(status, message, exit_code, truncated, language, edition, rustc). timestamp·trace_id·timings 없음 → 같은 코드·결과면 같은 CID. 실행 전에 끝난 요청(compile_error 등)은 `exit_code: null`. `rustcVersion` 상수는 `Dockerfile.compiler` 태그와 m3-02.sh 가 비교
+- `handler.go`: sleep stub·`fakeCID` 제거, `Uploader` 주입, `ipfs.upload` step 이 `context.WithTimeout(10s)` 로 호출. 성공 시 span+root 에 `ipfs.cid`, `cid`/`ipfs_url`(`http://ipfs.lgtm.local/ipfs/<cid>/`). 실패/timeout 이면 `cid`/`ipfs_url` JSON `null`. `IPFS_API_URL` env(`k8s/app/backend.yaml`, 기본 `http://kubo-api.ipfs.svc.cluster.local:5001`). 413/429/400 은 업로드 전에 return
+- `scripts/verify/m3-02.sh`(먼저 실패 상태로 커밋 1a50ee1), `make verify` 에 추가(m3-01 뒤). port-forward 26080/26200
+
+### PRD 해석 / 차이 (결정 반영)
+- **PRD 해석: TR-02 의 root ERROR 는 실행 실패에만 적용한다. 업로드 실패는 부분 실패로 보고 `ipfs.upload` span 만 ERROR, root span 과 응답 status 는 유지한다.**
+- `ipfs_url` 은 끝에 `/` 포함 (PRD 6.2 예시는 슬래시 없음, 지시에 따름). 실패 시 `cid` 도 `null` (PRD 6.2 는 ipfs_url 만 명시)
+- 큐 슬롯은 `release()` 가 ipfs.upload 뒤라 업로드 시간까지 점유한다 (기존 구조 그대로). `maxQueueWait` 45s 는 변경하지 않고 주석만 갱신: 정상 최악(loop{}+업로드 0.2s ≈ 5.5s)은 8×5.5/2 ≈ 22s. Kubo 가 응답 없을 때 짧은 코드는 슬롯당 약 10.3s → 8×10.3/2 ≈ 41s < 45s 라 429 로 안 잘린다. loop{} 가 몰리고 Kubo 도 죽은 조합(≈15.4s)은 8×15.4/2 ≈ 61s > 45s 라 초과분은 429. **10초 업로드는 대기 상한(45s) 계산에 포함되며, 이 조합에서만 상한을 넘는다** (이 조합은 실측하지 않음, 계산값)
+
+### 중요한 발견
+- **keep-alive 를 끈 이유와 범위**: NetworkPolicy 는 새 연결만 막는다. keep-alive 가 켜진 첫 구현에서는 Kubo 5001 을 막은 뒤에도 재사용 연결로 업로드가 성공해서(m3-02 첫 실행) 차단 테스트가 성립하지 않았다. 클러스터 내부라 연결 비용은 무시할 만하다(실측 업로드 1~17ms). **범위는 IPFS client 전용 `http.Transport` 하나뿐이다**: `backend/internal/ipfs/client.go` 의 `New()` 가 `http.DefaultTransport.(*http.Transport).Clone()` 에 `DisableKeepAlives=true` 를 건다 (DefaultTransport 자체는 안 바꿈). compiler client(`execute/compiler_client.go`)는 diff 0줄, 전역 설정 변경 없음 (`grep DisableKeepAlives|DefaultTransport` 로 확인)
+- **이 클러스터의 NetworkPolicy 는 차단 시 연결을 거부(REJECT)한다**: 차단 중 요청이 0.12~0.56s 에 실패. 그래서 NetworkPolicy 차단 검사로는 10초 timeout 경로를 못 잰다. **실제 10초 timeout 은 별도 검사로 실측했다**: `docker exec k3d-lgtm-server-0` 로 `ipfs daemon` PID 를 찾아 `kill -STOP` (커널은 연결을 받지만 응답이 없음) → 요청 → 응답 10.09~10.15s, `timings_ms.ipfs_upload=10001ms`, cid/ipfs_url null, 실행 status 그대로, `ipfs.upload` span ERROR, root 비-ERROR → trap 에서 `kill -CONT`, 5001 응답 복구 poll(실측 0.32s). 이 동안 Kubo 컨테이너 restartCount 0 → 0 (liveness/readiness 가 tcpSocket 이라 정지 중에도 통과). 종료 후 `ipfs daemon` 상태 S(실행 중), kubo-ingress 포트 5001 8080 4001 4001 복구 확인
+
+### 검증표 (VM `lgtm-vm`, 로그 `~/lgtm-logs/m3-02-*.log`)
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| 실패 상태 먼저 커밋 | `m3-02-red.log` (stub backend) | 확인(VM): 37 PASS / 28 FAIL (cid 형식, gateway 내용 불일치 등) |
+| 정상 코드 → 200, cid(`bafy…`), `ipfs_url=http://ipfs.lgtm.local/ipfs/<cid>/`, main.rs 바이트 동일(`cmp`), output.txt/status.json 내용 정확 일치, 디렉토리 정확히 3개 | `m3-02-run2.log` | 확인(VM) |
+| FE 형식 `http://ipfs.lgtm.local/ipfs/<cid>`(슬래시 없음) `curl -L` | 같은 로그 | 확인(VM): 최종 200, redirect 1회, 최종 URL 슬래시 포함, 본문에 main.rs/output.txt/status.json 목록. (브라우저에서 클릭한 것은 아님) |
+| compile_error(문법·deny-list `include_str!`), timeout(`loop {}`), runtime_error(exit 3), truncated 모두 cid 있음, status.json status 일치(exit_code: null / -1 / 3), deny-list 업로드에 `/etc/passwd` 내용 없음 | 같은 로그 | 확인(VM) |
+| `ipfs pin ls --type=recursive <cid>` 성공 (위 8개 CID) | 같은 로그 | 확인(VM) |
+| 같은 코드 두 번 → 같은 CID, 다른 코드 → 다른 CID | 같은 로그 | 확인(VM) |
+| 400/413 은 업로드 안 함 | pin 개수 전후 동일 | 확인(VM). 429 는 단위 테스트(큐 거부 경로가 업로드 전에 return) |
+| Tempo: `ipfs.upload` span 과 root 의 `ipfs.cid` == 응답 cid, 성공 시 span 비-ERROR | 같은 로그 | 확인(VM) |
+| Kubo 5001 차단(저장한 원본으로 복구): 차단 전 연결 성공(poll 상한 40s, 실측 0.09s) → replace → backend 라벨 probe pod 연결 실패(상한 40s, 실측 1.08~1.29s) → 요청 | `m3-02-run2.log`, `m3-02-final-verify.log` | 확인(VM): 응답 0.12~0.56s(13초 이내), status=success·stdout 그대로, `cid`/`ipfs_url` null, `ipfs.upload` span ERROR, root 비-ERROR, 실패 span 에 ipfs.cid 없음 |
+| 복구: 저장한 원본으로 replace(kubo.yaml 재적용 안 함) → 5001 연결 성공(상한 40s, 실측 0.05~0.08s) → spec 이 차단 전과 동일 → 다음 요청이 다시 같은 CID | 같은 로그 | 확인(VM). 스크립트 종료 후 `kubo-ingress` 포트 5001 8080 4001 4001 |
+| `lgtm_stage_duration_seconds_count{stage="ipfs_upload"}` increase > 0 | Mimir | 확인(VM) |
+| backend 로그에 코드 원문(MARK) 없음 | `kubectl logs deploy/backend` | 확인(VM) (최근 15분 로그 기준) |
+| `rustcVersion`(1.99.1) == `Dockerfile.compiler` 태그 | m3-02.sh | 확인(VM) |
+| 단위 테스트 `go test ./internal/...` | **VM 에서 docker `golang:1.27.3-trixie` 이미지로 실행** (VM 에 Go 설치 안 함, m2-04 와 같은 방식). 개발 중 Mac 에서도 `go test ./internal/execute ./internal/ipfs` 실행했으나 그건 검증으로 안 침 | 확인(VM) |
+| `make clean && make` exit 0 (144s), 재실행 `make` exit 0 (20s), `make verify` 전체 exit 0 (2755s, m3-02 포함) | `m3-02-final-make1/2.log`, `m3-02-final-verify.log` | 확인(VM) |
+| **실제 10초 timeout**: Kubo daemon `kill -STOP` → 요청 | `m3-02-m-run.log`, `m3-02-m-verify.log` | 확인(VM): 정지 확인 poll(상한 40s, 실측 3.06s) 후 응답 10.09~10.15s(10~13s), `ipfs_upload=10001ms`, cid/ipfs_url null, status 그대로, `ipfs.upload` span ERROR, root 비-ERROR. `kill -CONT` 후 5001 복구 poll(상한 40s, 실측 0.32s), 복구 후 요청이 다시 같은 CID. **Kubo 컨테이너 restartCount 0 → 0** (두 번 모두) |
+| origin/main(a843b1c, F-M3-03 포함) merge 후 `make build deploy` → m3-02.sh → `make verify` 전체 (make clean 은 앞서 수행해 생략) | `m3-02-m-build.log` `BUILD_DEPLOY_EXIT=0` 20s, `m3-02-m-run.log` `M302_EXIT=0` 73s ALL PASS, `m3-02-m-verify.log` `VERIFY_EXIT=0` 588s | 확인(VM). `VERIFY_ALL` = m1-01…m2-04, m3-01, m3-02, m4-01, m4-02, m6-03, m3-03 전부 포함, HANDOFF 블록 F-M3-02/F-M3-03/F-M6-03/F-M2-04 유지 |
+| m3-02.sh 최종 | `m3-02-run2.log` | 확인(VM): 65 PASS, ALL PASS (약 52s) |
+
+### 안 된 것 / 미확인
+- 10초 timeout 은 `kill -STOP` 방식으로 실측했다. NetworkPolicy 의 패킷 drop(black-hole) 방식은 이 클러스터가 REJECT 라 재현하지 못했다 (STOP 은 커널이 연결만 받고 응답이 없는 경우로, 응답 없음 상황의 대표로 본다)
+- frontend 는 수정하지 않았다. `ResultView.tsx` 는 `ipfs_url` null → "공유 링크 생성 실패(IPFS timeout)" 를 렌더링하는 기존 코드이며, 브라우저에서 실제 null 응답을 렌더링해 본 것은 **미확인** (frontend 단위 테스트는 `make build` 의 Docker build 단계에서 통과)
+- Kubo 응답 지연(느린 add) 시의 업로드 시간 분포는 측정하지 않았다 (실측: 작은 디렉토리 1~17ms)
+- ipfs.io 링크(ResultView 의 PUBLIC_IPFS)는 F-M3-03 에서 확인한 대로 현재 HTTP 요청이 거부된다. 이번 범위 밖
+- origin/main(a843b1c, F-M3-03 포함)을 merge 해 `VERIFY_ALL` 과 HANDOFF 충돌을 해결했다 (둘 다 유지)
+
+### 다음 단계
+- F-M5-01 instrumentation (TR-03/04 나머지 attribute, bucket)
+
 ## F-M3-03 external-gateway (브랜치 feat/m3-03-external-gateway)
 
 ### 한 일
