@@ -10,6 +10,60 @@
 ### 다음 단계
 -->
 
+## F-M6-05 repo-layout (브랜치 feat/m6-05-repo-layout)
+
+F-M6-05에서 경로가 바뀌었다. **아래 과거 블록 본문의 경로는 고치지 않았다.** 옛 경로는 이 대응표로 읽는다.
+
+### 옛 경로 → 새 경로 대응표
+| 옛 경로 | 새 경로 |
+|---|---|
+| `HANDOFF.md` | `docs/HANDOFF.md` |
+| `images.txt` | `k8s/images.txt` |
+| `scripts/install.sh`, `cluster.sh`, `hosts.sh` | `scripts/setup/` |
+| `scripts/build.sh`, `build-frontend.sh`, `image-tag.sh` | `scripts/build/` |
+| `scripts/with-docker.sh` | `scripts/lib/with-docker.sh` (지시는 build/였으나 공용 래퍼라 lib/로, 계획 승인됨) |
+| `scripts/prefetch-images.sh`, `import-images.sh`, `check-images.sh` | `scripts/images/` |
+| `scripts/wait-backend.sh`, `wait-ingress.sh`, `wait-dashboards.sh` | `scripts/wait/` |
+| `scripts/load.sh`, `ipfs-check.sh` | `scripts/tools/` |
+| `scripts/verify/mX-NN.sh` | `scripts/verify/mX-NN-<브랜치 이름>.sh` (m0-01-skeleton-install … m6-04-stability, 신규 m6-05-repo-layout) |
+| `scripts/verify/lib-pf.sh` | 그대로 |
+| `dashboards/.gitkeep`, `frontend/.gitkeep`, `k8s/.gitkeep`, `k8s/dummy/` | 삭제 |
+
+### 한 일
+- git mv로 이동해 이력을 유지했다. 경로 문자열은 Makefile, scripts/ 전체, README.md, CLAUDE.md, k8s/images.txt 주석에서 고쳤다.
+- 자기 위치 기준 경로를 한 단계 깊게 고쳤다: `cd "$(dirname …)/../.."`(build, build-frontend, cluster, prefetch, import, check-images), ipfs-check `ROOT`, image-tag `/../../$dir`, install `../lib/with-docker.sh`.
+- Makefile에서 한 일:
+  - `VERIFY_M1`과 `VERIFY_ALL`을 전체 이름으로 바꾸고 끝에 `m6-05-repo-layout`을 추가했다.
+  - deploy의 `-n dummy delete … dummy-*` 줄과 그 주석을 제거했다. k8s/dummy는 이미 apply되지 않고 있었다.
+- verify 검사 변경 (계획 승인됨):
+  - m0-01: `.gitkeep` 존재 검사를 제거하고, 파일 검사를 `docs/HANDOFF.md`로 바꿨다.
+  - m0-02: `OUR_NS="dummy"`와 8번 검사(dummy namespace resources)를 제거했다. m0-01과 m0-02는 `make verify`에 포함되지 않는다.
+- 주석 수정 (동작 변경 없음, 사용자 지시):
+  - `backend/internal/execute/files.go:22`의 `scripts/verify/m3-02.sh`를 `m3-02-ipfs-upload.sh`로 바꿨다.
+  - `k8s/app/backend.yaml:65`의 `dummy(k8s/dummy)`를 `frontend (k8s/app/frontend.yaml)`로 바꿨다.
+- 신규 `scripts/verify/m6-05-repo-layout.sh`를 추가했다. 먼저 실패 상태로 커밋했다(643d68e). 검사 항목은 루트 파일 목록, .gitkeep 0개, k8s/dummy 없음, 옛 경로 0건(Makefile, README, CLAUDE.md, scripts, backend, k8s, frontend Dockerfile), Makefile이 참조하는 스크립트와 VERIFY_ALL 스크립트의 존재다.
+
+### 된 것 / 안 된 것
+- 검증표 참고.
+- 고치지 않은 것:
+  - 과거 HANDOFF 블록 본문
+  - m3-01과 m4-02의 dummy 부재 검사 (`k8s/dummy/*.yaml` 없음, `dummy-*` 리소스 없음). 계속 통과하므로 유지했고, m6-05의 `k8s/dummy` 검사에서 이 두 파일만 예외로 둔다.
+- files.go 주석 변경으로 backend 소스 hash가 바뀌어서, backend와 compiler 이미지 태그가 바뀌었다(`src-99f734e63e98` → `src-2711ced6eb57`). image-tag.sh는 backend/ 아래 모든 파일 내용을 입력으로 쓴다. 그래서 이 PR을 배포하면 backend와 compiler pod가 한 번 재시작된다. backend.yaml 주석만으로는 재시작되지 않는다(검증표).
+
+### 다음 단계
+- 다른 브랜치나 worktree(예: `../ft_lgtm_fe`)에서 옛 경로로 작업 중이면 rebase 시 경로 충돌이 난다. 위 대응표로 옮긴다.
+
+### 검증표
+| 주장 | 확인 방법 | 결과 |
+|---|---|---|
+| m6-05는 구현 전 실패 | 643d68e 시점 VM `bash scripts/verify/m6-05-repo-layout.sh` | 확인(VM): exit 1, `RESULT: 10 건 실패` |
+| backend.yaml 주석 변경만으로는 live 객체가 바뀌지 않음 | `make clean` 전 기존 클러스터에서, 배포 중인 이미지(`src-99f734e63e98`)로 새 backend.yaml을 렌더링해 `kubectl diff -f -` | 확인(VM): `kubectl diff exit=0` (차이 없음) |
+| 새 구조로 처음부터 빌드/배포 | VM `make clean && make` | 확인(VM): `MAKE_EXIT=0` |
+| 전체 verify (m6-05 포함) | VM `make verify`, 로그 `~/lgtm-logs/m6-05-verify-all.log` | 확인(VM): `VERIFY_EXIT=0`, `verify: ALL PASS`. m6-05는 PASS 43건, `RESULT: 모두 통과` |
+| 재배포 시 backend 재시작 없음 | `make deploy` 재실행 전후 backend deployment generation과 pod 이름 비교 | 확인(VM): gen 3 → 3, pod `backend-965449c4b-ld8nz` 동일. kubectl 출력은 `deployment.apps/backend configured`였으나 generation이 그대로라 spec 변경은 없음 |
+| m0-01 (make verify 밖) | VM `bash scripts/verify/m0-01-skeleton-install.sh` 1회 | 확인(VM): exit 0, `RESULT: 모두 통과` |
+| m0-02 (make verify 밖) | 실행 안 함. 4번 검사(세 호스트 본문이 서로 다름)는 이 피처와 무관한 기존 검사 | 해당 없음 |
+
 ## F-M6-01 readme (브랜치 feat/m6-01-readme)
 
 ### 한 일
