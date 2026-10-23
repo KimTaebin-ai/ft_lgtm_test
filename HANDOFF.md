@@ -40,11 +40,15 @@
 | `lgtm_*` label 이름에 cid/sha/trace 없음(164 series), exemplar 가 trace_id 반환 | 같은 로그 | 확인(VM) |
 | `go test ./internal/...` (docker `golang:1.27.3-trixie`) | m5-01.sh 안에서 실행 | 확인(VM) |
 | `make clean && make`, `make` 연속 exit 0 | `m5-01-clean-make.log`, `m5-01-make2.log` | 확인(VM) |
-| `make verify` 전체 exit 0 | `m5-01-fullverify.log` | **미확인: `VERIFY_EXIT=2`, m2-04 에서 중단.** 아래 참고 |
+| `make verify` 전체 exit 0 | `m5-01-fullverify.log` | **미확인: `VERIFY_EXIT=2`, m2-04 에서 중단.** 아래 참고. m2-04 는 수정 후 단독으로 2회 PASS, 전체는 재실행 안 함 |
 | m1-01~m2-03 | 같은 `make verify` 실행 | 확인(VM): ALL PASS |
 | m3-01, m3-02, m4-01, m4-02, m6-03, m3-03, m5-01 | m2-04 뒤라 `make verify` 가 실행하지 못해 같은 순서로 하나씩 실행 (`m5-01-rest-*.log`) | 확인(VM): 전부 exit 0. 단 `make verify` 한 번으로 통과한 것은 아님. m5-01 은 아래 스크립트 수정 후 `m5-01-run2.log` |
 
-**m2-04 실패 (원인 미확정, 정보 수집 1회 후 재실행하지 않음)**: `FAIL: lgtm_executions_total ... increase() = '12' (기대 11)`. 나머지 m2-04 검사는 모두 PASS. 같은 구간의 `sum by (status)(lgtm_executions_total)` 증가 시각을 조회하니 m2-03 의 마지막 요청(15:38:35, success +1 / timeout +2)이 m2-04 시작 직후이다. m2-04 의 `increase(...[경과+15s])` 구간이 직전 스크립트 꼬리에 걸렸을 가능성이 있다(**추정, 미확인**). 이 피처의 변경은 `RecordExecution` 호출 횟수를 바꾸지 않았다. PR 직전 전체 verify 에서 m2-04 가 한 번 실패한 상태로 남는다.
+**m2-04 실패와 수정**: 전체 `make verify` 에서 `lgtm_executions_total ... increase() = '12' (기대 11)` 한 건만 FAIL (나머지 m2-04 검사는 PASS).
+- 원인: 직전 스크립트(m2-03)의 요청이 reader 5초 주기 + collector batch 로 늦게 Mimir 에 들어와 m2-04 의 `increase(...[스크립트 시작 후 경과+15s])` 구간에 섞였다. 실패 직후 `sum by (status)(lgtm_executions_total)` 증가 시각을 조회하니 m2-03 의 마지막 요청(15:38:35)이 m2-04 시작 직후와 겹쳤다. 직접 재현으로 증명한 것은 아니고, 아래 수정 후 2회 PASS 가 이 진단과 맞는다는 것까지 확인했다. 이 피처는 `RecordExecution` 호출 횟수를 바꾸지 않았다.
+- 수정(`scripts/verify/m2-04.sh`, 기대값 11/10 은 그대로): `wait_stable` 추가 — `lgtm_executions_total` 과 `lgtm_queue_rejected_total` 합계가 10초 간격 두 번 같을 때까지 대기(상한 60초). 시작 기준(`T_BASE`)을 안정된 시각으로 잡고, `poll_increase` 도 끝값을 읽기 전에 같은 방식으로 안정을 기다린 뒤 `increase(...[T_BASE 이후 경과+5s])` 를 읽는다(+5s 는 reader 주기 한 번분, 기준 앞 10초는 변화 없음이 확인된 구간).
+- 확인(VM, `m2-04fix-*.log`): `m2-03.sh` 직후 `m2-04.sh` 를 2쌍 연속 실행, 둘 다 ALL PASS(27 PASS), executions 11 / rejected 10. 전체 `make verify` 는 다시 하지 않았다(그래서 위 "make verify 전체 exit 0" 은 여전히 미확인).
+- 같은 문제 가능성이 있는 다른 `increase()` 사용(**목록만, 수정 안 함**): `scripts/verify/m3-02.sh:364` — 구간 `T_START+15s`, `ipfs_upload` stage count 증가가 **> 0** 인지만 보므로 직전 스크립트 요청이 섞여도 결과가 달라지지 않는다(정확한 개수 비교가 아님). 그 밖에 verify 스크립트의 `increase()`/`rate()` 는 m2-04.sh 뿐이고, m2-04 의 `stage queue count == stage compile count`(L225-232)는 raw 누적값 비교라 구간 문제가 없다.
 
 **m5-01.sh 수정 1건**: 전체 실행 중 `[ml]` trace 에 rustc span 이 없어 1건 FAIL 했다. 원인은 `fetch_trace` 가 root 와 ipfs.upload 만 보이면 반환해서, 별도로 export 되는 compiler span 보다 먼저 가져온 것이다. rustc 까지 보일 때 종료하도록 고쳤고 이후 ALL PASS.
 

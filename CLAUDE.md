@@ -39,6 +39,7 @@ backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HAN
 - 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). 스크립트는 bash + GNU 도구 기준
 - VM 검증: rsync -a --delete --exclude .git --exclude node_modules ./ lgtm-vm:~/lgtm/ 후 ssh lgtm-vm 'cd ~/lgtm && ...'. macOS 실행 결과는 검증으로 치지 않는다
 - 개발 반복 중 make clean 금지. make 또는 make build deploy로 갱신. make clean && make와 make verify 전체는 PR 직전 1회
+- PR 직전 검증: make build deploy → 이 피처 verify + 영향받는 verify(이유를 검증표에). make clean && make + 전체 verify는 Makefile/k8s/images.txt 변경 시와 마일스톤 마지막 피처에서만.
 - 반복 중 검증은 이번 피처의 verify 스크립트만
 - 원인 불명 간헐 실패는 정보 수집 1회 후 HANDOFF에 기록하고 진행. 재현 시도를 반복하지 않는다
 - VM 작업(rsync, make, verify) 전에 `ssh lgtm-vm 'mkdir ~/.lgtm-vm.lock'`으로 lock을 잡고, 실패하면 다른 세션이 사용 중이므로 멈추고 보고한다. 끝나면 `rmdir ~/.lgtm-vm.lock`
