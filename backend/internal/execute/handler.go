@@ -1,5 +1,5 @@
 // Package execute는 POST /api/execute 핸들러다. compile은 compiler 서비스를 호출하고(F-M2-01),
-// execute는 wasmtime-go로 실제 실행한다(F-M2-03). ipfs.upload는 아직 sleep stub이다 (F-M3-02에서 교체).
+// execute는 wasmtime-go로 실제 실행하고(F-M2-03), 결과는 Kubo로 디렉토리 업로드한다(F-M3-02).
 package execute
 
 import (
@@ -8,8 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"lgtm/backend/internal/ipfs"
 	"lgtm/backend/internal/limiter"
 	"lgtm/backend/internal/telemetry"
 	"lgtm/backend/internal/wasmexec"
@@ -43,12 +44,18 @@ const (
 	// 동시 처리 2 + 대기 8 (PRD BE-09, SEC-07, SEC-08). 큐 범위는 compile + execute + ipfs.upload 전체다.
 	maxActive  = 2
 	maxWaiting = 8
-	// maxQueueWait는 대기 상한 시간이다. 최악 대기 = 앞 8개 × 요청 1건 소요 / 2.
-	// 정상 최악(loop {}: compile 0.25s + execute 5.1s + ipfs 0.1s ≈ 5.4s)이면 8×5.4/2 ≈ 22s.
+	// maxQueueWait는 대기 상한 시간이다. 최악 대기 = 앞 8개 × 요청 1건 소요 / 2. 슬롯은 ipfs.upload가 끝날 때까지 점유된다.
+	// 정상 최악(loop {}: compile 0.25s + execute 5.1s + ipfs 업로드 0.1~0.2s ≈ 5.5s)이면 8×5.5/2 ≈ 22s.
+	// Kubo가 응답하지 않으면(업로드 10초 timeout) 짧은 코드도 슬롯을 약 10.3s 점유한다: 8×10.3/2 ≈ 41s < 45s라 대기열이 429로 잘리지 않고 처리된다.
+	// 단 loop {} 요청이 몰리고 Kubo까지 죽은 최악 조합(0.25+5.1+10 ≈ 15.4s)은 8×15.4/2 ≈ 61s > 45s라 초과분은 429다.
 	// 이론 최악(compile 15s + execute 5s + ipfs 10s)은 8×30/2 = 120s라 사용자가 기다릴 수 없으므로,
 	// 정상 최악의 약 2배인 45초에서 429로 돌려보낸다. 무한 대기는 전부 timeout이 되므로 금지 (SEC-08).
 	maxQueueWait = 45 * time.Second
 )
+
+// ipfsUploadTimeout은 Kubo add + pin 상한이다 (PRD BE-10, SEC-11). 초과하면 결과는 그대로 반환하고 cid는 null이다.
+// 테스트가 짧게 바꿔 timeout 경로를 빠르게 확인할 수 있도록 var로 둔다 (운영 코드는 바꾸지 않는다).
+var ipfsUploadTimeout = 10 * time.Second
 
 // InitMetrics는 lgtm_executions의 모든 status series와 lgtm_queue_rejected를 0으로 시작시킨다 (운영 기동 시 1회).
 func InitMetrics(m *telemetry.Metrics) {
@@ -58,6 +65,11 @@ func InitMetrics(m *telemetry.Metrics) {
 
 // NewLimiter는 PRD 기준(처리 2 + 대기 8, 대기 상한 45초)의 Limiter를 만든다.
 func NewLimiter() *limiter.Limiter { return limiter.New(maxActive, maxWaiting, maxQueueWait) }
+
+// Uploader는 파일들을 IPFS 디렉토리로 올리고 CID를 돌려준다. 운영에서는 *ipfs.Client, 테스트에서는 가짜를 넣는다.
+type Uploader interface {
+	AddDir(ctx context.Context, files []ipfs.File) (string, error)
+}
 
 // Executor는 wasm 하나를 실행한다. 운영에서는 *wasmexec.Runner, 테스트에서는 가짜를 넣는다.
 type Executor interface {
@@ -82,8 +94,8 @@ type response struct {
 	Stdout    string  `json:"stdout"`
 	Stderr    string  `json:"stderr"`
 	Truncated bool    `json:"truncated"`
-	CID       string  `json:"cid"`
-	IPFSURL   string  `json:"ipfs_url"`
+	CID       *string `json:"cid"`      // 업로드 실패/timeout이면 null
+	IPFSURL   *string `json:"ipfs_url"` // 업로드 실패/timeout이면 null
 	TraceID   string  `json:"trace_id"`
 	TimingsMS timings `json:"timings_ms"`
 }
@@ -94,13 +106,14 @@ type handler struct {
 	metrics  *telemetry.Metrics
 	compiler *compilerClient
 	exec     Executor
+	up       Uploader
 	lim      *limiter.Limiter
 }
 
 // NewHandler는 root span(RootSpanName)을 만드는 otelhttp 래퍼까지 포함한 http.Handler를 반환한다.
 // compilerURL은 compiler의 POST /compile 전체 URL이다.
-func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics, compilerURL string, exec Executor, lim *limiter.Limiter) http.Handler {
-	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m, compiler: newCompilerClient(compilerURL), exec: exec, lim: lim}
+func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics, compilerURL string, exec Executor, up Uploader, lim *limiter.Limiter) http.Handler {
+	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m, compiler: newCompilerClient(compilerURL), exec: exec, up: up, lim: lim}
 	if err := m.RegisterQueueGauges(lim.Active, lim.Waiting); err != nil {
 		log.Error("queue gauge 등록 실패", "error", err.Error())
 	}
@@ -158,11 +171,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.metrics.RecordStage(ctx, "queue", qwait)
 
 	resp := response{Status: statusSuccess, TraceID: root.SpanContext().TraceID().String()}
+	var exitCode *int // 실행 전에 끝난 요청(compile 실패 등)은 nil → status.json 의 exit_code: null
 
 	// compile: compiler 서비스 호출. step의 span ctx로 호출해야 rustc span의 parent가 compile이 된다.
 	var wasm []byte
 	var cErr error
-	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, 0, func(ctx context.Context, span trace.Span) error {
+	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, func(ctx context.Context, span trace.Span) error {
 		var err error
 		h.log.InfoContext(ctx, "compile started")
 		wasm, err = h.compiler.compile(ctx, req.Code)
@@ -185,19 +199,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		root.RecordError(cErr)
 		root.SetStatus(codes.Error, resp.Message)
 	} else {
-		h.execute(ctx, root, wasm, &resp)
+		exitCode = h.execute(ctx, root, wasm, &resp)
 	}
 
-	// ipfs.upload: 실패한 실행도 업로드한다 (BE-05)
-	resp.CID = fakeCID(sha)
-	resp.IPFSURL = "http://ipfs.lgtm.local/ipfs/" + resp.CID
-	resp.TimingsMS.IPFSUpload, _ = h.step(ctx, "ipfs.upload", trace.SpanKindInternal, ipfsStubDelay(), func(ctx context.Context, span trace.Span) error {
-		h.log.InfoContext(ctx, "ipfs upload started")
-		span.SetAttributes(attribute.String("ipfs.cid", resp.CID))
-		h.log.InfoContext(ctx, "ipfs upload finished", "stub", true)
+	// ipfs.upload: 실패한 실행도 업로드한다 (BE-05). 업로드 실패/timeout은 부분 실패다: ipfs.upload span만 ERROR로 두고
+	// 응답 status와 root span은 실행 결과 그대로 유지하며 cid/ipfs_url은 null이다 (BE-10). 코드 원문은 로그에 남기지 않는다.
+	files := buildFiles(req.Code, resp, exitCode)
+	var cid string
+	var uErr error
+	resp.TimingsMS.IPFSUpload, uErr = h.step(ctx, "ipfs.upload", trace.SpanKindInternal, func(ctx context.Context, span trace.Span) error {
+		uctx, cancel := context.WithTimeout(ctx, ipfsUploadTimeout)
+		defer cancel()
+		h.log.InfoContext(ctx, "ipfs upload started", "files", len(files))
+		c, err := h.up.AddDir(uctx, files)
+		if err != nil {
+			return fmt.Errorf("ipfs upload: %w", err)
+		}
+		cid = c
+		span.SetAttributes(attribute.String("ipfs.cid", cid))
+		h.log.InfoContext(ctx, "ipfs upload finished", "cid", cid)
 		return nil
 	})
-	root.SetAttributes(attribute.String("ipfs.cid", resp.CID))
+	if uErr == nil {
+		url := "http://ipfs.lgtm.local/ipfs/" + cid + "/"
+		resp.CID, resp.IPFSURL = &cid, &url
+		root.SetAttributes(attribute.String("ipfs.cid", cid))
+	}
 	release() // 응답 쓰기 전에 슬롯 반환 (느린 클라이언트가 슬롯을 쥐지 않게)
 
 	h.log.InfoContext(ctx, "execute request done", "status", resp.Status)
@@ -207,19 +234,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// step은 자식 span 하나를 만들고 d만큼 sleep한 뒤(d가 0이면 생략) fn을 실행한다.
+// step은 자식 span 하나를 만들고 fn을 실행한다.
 // fn이 error를 반환하면 span을 ERROR로 표시하고 메시지를 event로 남긴다 (TR-02).
-func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, d time.Duration, fn func(context.Context, trace.Span) error) (int64, error) {
+func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, fn func(context.Context, trace.Span) error) (int64, error) {
 	ctx, span := h.tracer.Start(ctx, name, trace.WithSpanKind(kind))
 	defer span.End()
 	start := time.Now()
-	var err error
-	if d > 0 {
-		err = sleep(ctx, d)
-	}
-	if err == nil {
-		err = fn(ctx, span)
-	}
+	err := fn(ctx, span)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -267,38 +288,19 @@ func (h *handler) queueRejected(ctx context.Context, w http.ResponseWriter, root
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "queue_full", "message": "서버가 바쁩니다. 잠시 후 다시 시도하세요", "trace_id": root.SpanContext().TraceID().String()})
 }
 
-// ipfsStubDelay: ipfs.upload stub은 50~100ms sleep (F-M3-02에서 실제 업로드로 교체).
-func ipfsStubDelay() time.Duration { return ms(50 + rand.IntN(51)) }
-
-func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
-
-func sleep(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// fakeCID는 stub용 가짜 CID다 (코드 sha256 기반, 실제 CID 아님).
-func fakeCID(sha string) string { return "bafy" + sha[:52] }
-
 // execFailure는 사용자 코드의 실행 실패(runtime_error/timeout/memory_limit)다. execute span을 ERROR로 만들기 위해
 // step의 error로 돌려주지만, 플랫폼 오류(internal_error)와 구분한다.
 type execFailure struct{ msg string }
 
 func (e *execFailure) Error() string { return e.msg }
 
-// execute는 execute 단계를 실행해 resp를 채운다. TR-04 attribute(exec.*)는 성공/실패 모두 execute span에 남긴다.
+// execute는 execute 단계를 실행해 resp를 채우고 종료 코드(실행 결과가 없으면 nil)를 돌려준다. TR-04 attribute(exec.*)는 성공/실패 모두 execute span에 남긴다.
 // 실패(success가 아닌 모든 status)면 execute span과 root span을 ERROR로 표시한다.
-func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, resp *response) {
+func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, resp *response) *int {
 	var res wasmexec.Result
 	var runErr error
 	var eErr error
-	resp.TimingsMS.Execute, eErr = h.step(ctx, "execute", trace.SpanKindInternal, 0, func(ctx context.Context, span trace.Span) error {
+	resp.TimingsMS.Execute, eErr = h.step(ctx, "execute", trace.SpanKindInternal, func(ctx context.Context, span trace.Span) error {
 		h.log.InfoContext(ctx, "execute started")
 		res, runErr = h.exec.Run(wasm)
 		if runErr != nil {
@@ -327,6 +329,10 @@ func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, res
 		root.RecordError(eErr)
 		root.SetStatus(codes.Error, resp.Message)
 	}
+	if runErr != nil {
+		return nil // 실행기가 결과를 못 냈으므로 종료 코드 없음
+	}
+	return &res.ExitCode
 }
 
 func execAttrs(res wasmexec.Result) []attribute.KeyValue {
