@@ -53,8 +53,10 @@ const (
 
 // Result는 한 번의 실행 결과다. 플랫폼 오류(엔진 생성 실패 등)는 Run의 error로 반환한다.
 type Result struct {
-	Status    string
-	Message   string // runtime_error 등의 한 줄 요약. 응답 message에 쓴다.
+	Status  string
+	Message string // runtime_error 등의 한 줄 요약. 응답 message에 쓴다.
+	// Class는 span/event/로그에 쓰는 분류형 문구다. Message와 달리 사용자 입력(panic 메시지, trap backtrace의 함수명)이 없다.
+	Class     string
 	Stdout    string
 	Stderr    string
 	Truncated bool
@@ -193,7 +195,7 @@ func (r *Runner) Run(wasm []byte) (Result, error) {
 	inst, err := r.linker.Instantiate(store, mod)
 	if err != nil {
 		if isMemoryLimitError(err) {
-			return Result{Status: StatusMemoryLimit, Message: "memory limit exceeded", ExitCode: -1}, nil
+			return Result{Status: StatusMemoryLimit, Message: "memory limit exceeded", Class: classMemory, ExitCode: -1}, nil
 		}
 		return Result{}, fmt.Errorf("instantiate 실패: %w", err)
 	}
@@ -226,7 +228,7 @@ func classify(err error, stderrTail []byte) Result {
 			if code == 0 {
 				return Result{Status: StatusSuccess, ExitCode: 0}
 			}
-			return Result{Status: StatusRuntimeError, Message: fmt.Sprintf("exit status %d", code), ExitCode: int(code)}
+			return Result{Status: StatusRuntimeError, Message: fmt.Sprintf("exit status %d", code), Class: fmt.Sprintf("exit code %d", code), ExitCode: int(code)}
 		}
 	}
 	var trap *wasmtime.Trap
@@ -234,16 +236,43 @@ func classify(err error, stderrTail []byte) Result {
 		if c := trap.Code(); c != nil {
 			switch *c {
 			case wasmtime.Interrupt:
-				return Result{Status: StatusTimeout, Message: "time limit exceeded (5s)", ExitCode: -1}
+				return Result{Status: StatusTimeout, Message: "time limit exceeded (5s)", Class: "time limit exceeded", ExitCode: -1}
 			case wasmtime.UnreachableCodeReached:
 				if isAllocFailure(stderrTail) {
-					return Result{Status: StatusMemoryLimit, Message: "memory limit exceeded", ExitCode: -1}
+					return Result{Status: StatusMemoryLimit, Message: "memory limit exceeded", Class: classMemory, ExitCode: -1}
 				}
 			}
 		}
-		return Result{Status: StatusRuntimeError, Message: "trap: " + lastLine(trap.Message()), ExitCode: -1}
+		return Result{Status: StatusRuntimeError, Message: "trap: " + lastLine(trap.Message()), Class: "wasm trap [" + trapName(trap) + "]", ExitCode: -1}
 	}
-	return Result{Status: StatusRuntimeError, Message: lastLine(err.Error()), ExitCode: -1}
+	return Result{Status: StatusRuntimeError, Message: lastLine(err.Error()), Class: "runtime error", ExitCode: -1}
+}
+
+const classMemory = "memory limit exceeded"
+
+// trapNames는 wasmtime TrapCode의 고정 이름이다. backtrace(사용자 함수명 포함)나 Message()는 쓰지 않는다.
+var trapNames = map[wasmtime.TrapCode]string{
+	wasmtime.StackOverflow:          "stack_overflow",
+	wasmtime.MemoryOutOfBounds:      "memory_out_of_bounds",
+	wasmtime.HeapMisaligned:         "heap_misaligned",
+	wasmtime.TableOutOfBounds:       "table_out_of_bounds",
+	wasmtime.IndirectCallToNull:     "indirect_call_to_null",
+	wasmtime.BadSignature:           "bad_signature",
+	wasmtime.IntegerOverflow:        "integer_overflow",
+	wasmtime.IntegerDivisionByZero:  "integer_division_by_zero",
+	wasmtime.BadConversionToInteger: "bad_conversion_to_integer",
+	wasmtime.UnreachableCodeReached: "unreachable",
+	wasmtime.Interrupt:              "interrupt",
+	wasmtime.OutOfFuel:              "out_of_fuel",
+}
+
+func trapName(t *wasmtime.Trap) string {
+	if c := t.Code(); c != nil {
+		if n, ok := trapNames[*c]; ok {
+			return n
+		}
+	}
+	return "unknown"
 }
 
 // isAllocFailure는 Rust std의 기본 alloc error handler 메시지("memory allocation of N bytes failed")를 찾는다.

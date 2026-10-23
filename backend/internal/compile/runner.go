@@ -30,7 +30,10 @@ const (
 var ErrTimeout = errors.New("compile timeout")
 
 // CompileError는 rustc가 0이 아닌 코드로 종료한 경우(사용자 코드 오류)다.
-type CompileError struct{ Stderr string }
+type CompileError struct {
+	Stderr   string
+	ExitCode int // rustc 종료 코드
+}
 
 func (e *CompileError) Error() string { return "rustc failed" }
 
@@ -127,7 +130,7 @@ func (r *Runner) Run(ctx context.Context, src []byte) (wasm []byte, wait time.Du
 	}
 	var ee *exec.ExitError
 	if errors.As(runErr, &ee) {
-		return nil, wait, &CompileError{Stderr: stderr.String()}
+		return nil, wait, &CompileError{Stderr: stderr.String(), ExitCode: ee.ExitCode()}
 	}
 	if runErr != nil {
 		return nil, wait, runErr

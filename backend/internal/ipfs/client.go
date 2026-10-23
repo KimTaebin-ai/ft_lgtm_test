@@ -90,7 +90,7 @@ func (c *Client) AddDir(ctx context.Context, files []File) (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-		return "", fmt.Errorf("kubo add HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return "", &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	// 응답은 줄 단위 JSON이다 (파일마다 한 줄, 마지막이 디렉토리). 중간에 실패하면 trailer X-Stream-Error 로 알려 준다.
@@ -127,3 +127,11 @@ func (c *Client) AddDir(ctx context.Context, files []File) (string, error) {
 	}
 	return dirCID, nil
 }
+
+// StatusError는 Kubo가 200이 아닌 HTTP 코드로 응답한 경우다. 분류(4xx/5xx)에 쓴다.
+type StatusError struct {
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("kubo add HTTP %d: %s", e.Code, e.Body) }

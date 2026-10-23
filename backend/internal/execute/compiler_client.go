@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+
+	"lgtm/backend/internal/compile"
 )
 
 const (
@@ -28,9 +31,24 @@ const (
 type userError struct {
 	Message string
 	Stderr  string
+	// Class는 span/event/로그에 쓰는 분류형 문구다. Message(rustc 첫 줄)는 사용자 식별자를 인용할 수 있어 쓰지 않는다.
+	Class string
 }
 
 func (e *userError) Error() string { return e.Message }
+
+// SpanMessage는 telemetry.Classified를 구현한다.
+func (e *userError) SpanMessage() string { return e.Class }
+
+// classRe는 compiler가 보낸 분류 문구의 형태다 ("rustc failed [E0425]", "source denied [deny-rename]"). 이 밖의 값은 버린다.
+var classRe = regexp.MustCompile(`^(rustc failed|source denied)( \[[A-Za-z0-9-]{1,40}\])?$`)
+
+func classFromHeader(h http.Header) string {
+	if c := h.Get(compile.ClassHeader); classRe.MatchString(c) {
+		return c
+	}
+	return "rustc failed"
+}
 
 type compilerClient struct {
 	url  string
@@ -74,13 +92,13 @@ func (c *compilerClient) compile(ctx context.Context, code string) ([]byte, erro
 		return wasm, nil
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		stderr := readText(resp.Body)
-		return nil, &userError{Message: firstErrorLine(stderr), Stderr: stderr}
+		return nil, &userError{Message: firstErrorLine(stderr), Stderr: stderr, Class: classFromHeader(resp.Header)}
 	case resp.StatusCode == http.StatusGatewayTimeout:
 		msg := strings.TrimSpace(readText(resp.Body))
 		if msg == "" {
 			msg = "compile timeout"
 		}
-		return nil, &userError{Message: msg, Stderr: msg + "\n"}
+		return nil, &userError{Message: msg, Stderr: msg + "\n", Class: "compile timeout"}
 	default:
 		return nil, fmt.Errorf("compiler 응답 HTTP %d", resp.StatusCode)
 	}
