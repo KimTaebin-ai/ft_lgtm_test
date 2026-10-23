@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"lgtm/backend/internal/limiter"
 	"lgtm/backend/internal/telemetry"
 	"lgtm/backend/internal/wasmexec"
 )
@@ -34,6 +35,23 @@ const (
 	statusCompileError  = "compile_error"
 	statusInternalError = "internal_error"
 )
+
+const (
+	// maxBodyBytes는 요청 body 상한이다 (PRD BE-01, SEC-06). JSON 래핑을 포함한 body 전체 기준.
+	maxBodyBytes = 64 * 1024
+
+	// 동시 처리 2 + 대기 8 (PRD BE-09, SEC-07, SEC-08). 큐 범위는 compile + execute + ipfs.upload 전체다.
+	maxActive  = 2
+	maxWaiting = 8
+	// maxQueueWait는 대기 상한 시간이다. 최악 대기 = 앞 8개 × 요청 1건 소요 / 2.
+	// 정상 최악(loop {}: compile 0.25s + execute 5.1s + ipfs 0.1s ≈ 5.4s)이면 8×5.4/2 ≈ 22s.
+	// 이론 최악(compile 15s + execute 5s + ipfs 10s)은 8×30/2 = 120s라 사용자가 기다릴 수 없으므로,
+	// 정상 최악의 약 2배인 45초에서 429로 돌려보낸다. 무한 대기는 전부 timeout이 되므로 금지 (SEC-08).
+	maxQueueWait = 45 * time.Second
+)
+
+// NewLimiter는 PRD 기준(처리 2 + 대기 8, 대기 상한 45초)의 Limiter를 만든다.
+func NewLimiter() *limiter.Limiter { return limiter.New(maxActive, maxWaiting, maxQueueWait) }
 
 // Executor는 wasm 하나를 실행한다. 운영에서는 *wasmexec.Runner, 테스트에서는 가짜를 넣는다.
 type Executor interface {
@@ -70,12 +88,16 @@ type handler struct {
 	metrics  *telemetry.Metrics
 	compiler *compilerClient
 	exec     Executor
+	lim      *limiter.Limiter
 }
 
 // NewHandler는 root span(RootSpanName)을 만드는 otelhttp 래퍼까지 포함한 http.Handler를 반환한다.
 // compilerURL은 compiler의 POST /compile 전체 URL이다.
-func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics, compilerURL string, exec Executor) http.Handler {
-	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m, compiler: newCompilerClient(compilerURL), exec: exec}
+func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics, compilerURL string, exec Executor, lim *limiter.Limiter) http.Handler {
+	h := &handler{log: log, tracer: tp.Tracer("lgtm-backend/execute"), metrics: m, compiler: newCompilerClient(compilerURL), exec: exec, lim: lim}
+	if err := m.RegisterQueueGauges(lim.Active, lim.Waiting); err != nil {
+		log.Error("queue gauge 등록 실패", "error", err.Error())
+	}
 	return otelhttp.NewHandler(h, RootSpanName,
 		otelhttp.WithTracerProvider(tp),
 		otelhttp.WithPropagators(propagation.TraceContext{}),
@@ -88,8 +110,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	root := trace.SpanFromContext(ctx)
 
+	// 413: Content-Length가 크면 본문을 읽지 않고 거부하고, 아니면 MaxBytesReader로 읽는 양 자체를 제한한다.
+	if r.ContentLength > maxBodyBytes {
+		h.tooLarge(ctx, w, root)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			h.tooLarge(ctx, w, root)
+			return
+		}
 		h.invalid(ctx, w, "요청 본문이 올바른 JSON이 아닙니다")
 		return
 	}
@@ -106,6 +139,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("code.size_bytes", len(req.Code)),
 	)
 	h.log.InfoContext(ctx, "execute request received", "code_size_bytes", len(req.Code))
+
+	// 큐: 400/413은 슬롯을 쓰지 않는다. 가득 차면 즉시 429, 대기 중 클라이언트가 끊으면 자리가 반환된다.
+	release, qwait, qerr := h.lim.Acquire(ctx)
+	if qerr != nil {
+		h.queueRejected(ctx, w, root, qerr)
+		return
+	}
+	defer release()
+	root.SetAttributes(attribute.Int64("queue.wait_ms", qwait.Milliseconds()))
+	// 대기 0도 기록한다. execution_duration은 큐 대기를 포함하므로 stage로 나눠야 지연 원인을 구분할 수 있다.
+	h.metrics.RecordStage(ctx, "queue", qwait)
 
 	resp := response{Status: statusSuccess, TraceID: root.SpanContext().TraceID().String()}
 
@@ -148,6 +192,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	root.SetAttributes(attribute.String("ipfs.cid", resp.CID))
+	release() // 응답 쓰기 전에 슬롯 반환 (느린 클라이언트가 슬롯을 쥐지 않게)
 
 	h.log.InfoContext(ctx, "execute request done", "status", resp.Status)
 	// root span은 otelhttp가 ServeHTTP 반환 뒤에 End한다. 그 전에 root ctx로 기록해야 exemplar에 trace_id가 붙는다.
@@ -185,6 +230,35 @@ func (h *handler) invalid(ctx context.Context, w http.ResponseWriter, msg string
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "invalid_request", "message": msg})
+}
+
+func (h *handler) tooLarge(ctx context.Context, w http.ResponseWriter, root trace.Span) {
+	h.log.WarnContext(ctx, "request rejected", "reason", "payload_too_large", "limit_bytes", maxBodyBytes)
+	root.SetAttributes(attribute.Bool("request.too_large", true))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Connection", "close") // 남은 본문을 읽지 않고 연결을 닫는다
+	w.WriteHeader(http.StatusRequestEntityTooLarge)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "payload_too_large", "message": "요청 본문은 64KB 이하여야 합니다"})
+}
+
+// queueRejected는 Acquire 실패를 처리한다. 429(가득 참/대기 상한)는 lgtm_queue_rejected_total만 올리고
+// lgtm_executions에는 넣지 않는다 (실행이 시작되지 않은 요청). 클라이언트가 끊은 경우는 응답을 쓰지 않는다.
+func (h *handler) queueRejected(ctx context.Context, w http.ResponseWriter, root trace.Span, err error) {
+	if !errors.Is(err, limiter.ErrFull) && !errors.Is(err, limiter.ErrWaitTimeout) {
+		root.SetAttributes(attribute.Bool("queue.cancelled", true))
+		h.log.InfoContext(ctx, "queue wait cancelled", "reason", err.Error())
+		return
+	}
+	reason := "full"
+	if errors.Is(err, limiter.ErrWaitTimeout) {
+		reason = "wait_timeout"
+	}
+	root.SetAttributes(attribute.Bool("queue.rejected", true), attribute.String("queue.reason", reason))
+	h.log.WarnContext(ctx, "request rejected", "reason", "queue_"+reason, "active", h.lim.Active(), "waiting", h.lim.Waiting())
+	h.metrics.RecordQueueRejected(ctx)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "queue_full", "message": "서버가 바쁩니다. 잠시 후 다시 시도하세요", "trace_id": root.SpanContext().TraceID().String()})
 }
 
 // ipfsStubDelay: ipfs.upload stub은 50~100ms sleep (F-M3-02에서 실제 업로드로 교체).

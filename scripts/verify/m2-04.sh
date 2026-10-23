@@ -275,7 +275,15 @@ wait "${BG_PIDS[@]}" 2>/dev/null
 n=0; for i in 1 2 4 5 6 7 8 9 10; do [ "$(code_of "c$i")" = 200 ] && n=$((n + 1)); done
 [ "$n" = 9 ] && pass "끊기지 않은 처리/대기 9건 모두 HTTP 200" || fail "끊기지 않은 9건 중 200 = $n건"
 
+# ---- 9. 단위 테스트 (limiter, 413/429 핸들러; cgo: golang 이미지에 gcc 포함) ----
+if "$ROOT/scripts/with-docker.sh" docker run --rm -v "$ROOT/backend:/src" -w /src -e GOTOOLCHAIN=local -e CGO_ENABLED=1 \
+	golang:1.27.3-trixie go test -count=1 ./internal/... >"$TMP/gotest.log" 2>&1; then
+	pass "go test ./internal/... (limiter, 413/429 핸들러 포함) 통과"
+else
+	fail "go test 실패: $(tail -20 "$TMP/gotest.log")"
+fi
+
 echo
-if [ "$fails" -eq 0 ]; then echo "m2-04: ALL PASS"; exit 0; fi
-echo "m2-04: ${fails}건 FAIL" >&2
+if [ "$fails" -eq 0 ]; then echo "ALL PASS (m2-04)"; exit 0; fi
+echo "FAILED: ${fails}건 (m2-04)" >&2
 exit 1

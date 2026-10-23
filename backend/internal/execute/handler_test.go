@@ -99,7 +99,7 @@ func newServerWithExec(t *testing.T, compilerURL string, ex Executor) (*httptest
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL, ex))
+	srv := httptest.NewServer(NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), tp, m, compilerURL, ex, NewLimiter()))
 	t.Cleanup(srv.Close)
 	return srv, rec, reader
 }
@@ -381,8 +381,11 @@ func TestMetricsNamesLabelsBucketsExemplar(t *testing.T) {
 func TestInvalidRequestRecordsNoMetric(t *testing.T) {
 	srv, _, reader := newServerWithMetrics(t)
 	post(t, srv.URL, `{"language":"go","code":"x"}`)
-	if ms := collect(t, reader); len(ms) != 0 {
-		t.Errorf("400 요청은 metric을 기록하지 않아야 함: %v", ms)
+	// queue gauge는 요청과 무관하게 항상 export된다. 요청이 만드는 metric만 없어야 한다.
+	for name := range collect(t, reader) {
+		if name != telemetry.MetricQueueActive && name != telemetry.MetricQueueWaiting {
+			t.Errorf("400 요청은 metric을 기록하지 않아야 함: %s", name)
+		}
 	}
 }
 

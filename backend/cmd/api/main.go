@@ -53,7 +53,7 @@ func run() error {
 		return fmt.Errorf("wasmexec: %w", err)
 	}
 	defer runner.Close()
-	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics, compilerURL, runner))
+	mux.Handle("POST /api/execute", execute.NewHandler(log, tel.TracerProvider, tel.Metrics, compilerURL, runner, execute.NewLimiter()))
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
