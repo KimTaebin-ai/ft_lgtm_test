@@ -16,6 +16,7 @@ spec:
       labels: {app: frontend}
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
@@ -33,6 +34,9 @@ spec:
             capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+          lifecycle:
+            # F-M6-04: backend.yaml 과 같은 이유 (Traefik 의 endpoint 제거 반영 지연)
+            preStop: {sleep: {seconds: 10}}
           readinessProbe:
             httpGet: {path: /, port: http}
             periodSeconds: 5
