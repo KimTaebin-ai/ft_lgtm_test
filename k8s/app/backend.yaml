@@ -39,11 +39,12 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
-            # F-M2-03 실측 (VM arm64, 동시 N건이 각각 9MB 를 쥐고 5초 spin 할 때 cgroup memory.peak):
-            #   idle 10MB / N=1 27MB / N=4 70MB / N=8 122MB / N=16 232MB → 동시 요청당 약 +14MB. 동시성 상한은 F-M2-04.
-            #   limit 512Mi = N=16 실측(232MB)의 2배 이상. request 는 idle + 몇 건 동시 실행 분.
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: 1, memory: 512Mi}
+            # F-M2-03 실측 (동시 N건이 각각 9MB 를 쥐고 5초 spin, cgroup memory.peak): N=1 27MB / N=4 70MB / N=8 122MB / N=16 232MB.
+            # F-M2-04 로 처리 2 + 대기 8 로 묶임. 실측 (VM arm64, backend 재시작 후 동시 20건 → 처리 10, 429 10):
+            #   idle 11MB, 실행 중 memory.current 43~63MB, memory.peak 70MB (m2-04-memprobe.log). 재시작·OOMKilled 0.
+            #   limit 256Mi = peak 의 약 3.8배 (compile 응답 wasm 버퍼·GC 여유), request 64Mi = idle + 처리 2건분 (peak 근처).
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: 1, memory: 256Mi}
 ---
 apiVersion: v1
 kind: Service
