@@ -196,7 +196,12 @@ if mode == "check":
         cs = [c for c in columns(frames) if any("duration" in k.lower() for k in c if k != "__frame")]
         rows = max([len(next(v for k, v in c.items() if "duration" in k.lower())) for c in cs] or [0])
         out(st == 200 and rows >= 2, "Slowest 쿼리 non-empty (HTTP %s, duration 행 %d개)" % (st, rows))
-        dur_fields = {k for c in cs for k in c if "duration" in k.lower()}
+        # sortBy transformation 은 field 의 표시 이름(displayNameFromDS, 예: traceDuration → Duration)으로 field 를 찾는다
+        dur_fields = set()
+        for f in frames:
+            for fl in (f.get("schema") or {}).get("fields") or []:
+                if "duration" in (fl.get("name") or "").lower():
+                    dur_fields |= {fl.get("name"), (fl.get("config") or {}).get("displayNameFromDS")} - {None}
         sorts = [tr for tr in p.get("transformations") or [] if tr.get("id") == "sortBy"]
         spec = [s for tr in sorts for s in (tr.get("options") or {}).get("sort") or []]
         out(any(s.get("desc") is True and s.get("field") in dur_fields for s in spec), "Slowest sortBy transformation 이 응답의 duration field %s 를 desc 로 정렬 (정의: %s)" % (sorted(dur_fields), spec))
