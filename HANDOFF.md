@@ -24,8 +24,8 @@
 - 큐 슬롯은 `release()` 가 ipfs.upload 뒤라 업로드 시간까지 점유한다 (기존 구조 그대로). `maxQueueWait` 45s 는 변경하지 않고 주석만 갱신: 정상 최악(loop{}+업로드 0.2s ≈ 5.5s)은 8×5.5/2 ≈ 22s. Kubo 가 응답 없을 때 짧은 코드는 슬롯당 약 10.3s → 8×10.3/2 ≈ 41s < 45s 라 429 로 안 잘린다. loop{} 가 몰리고 Kubo 도 죽은 조합(≈15.4s)은 8×15.4/2 ≈ 61s > 45s 라 초과분은 429. **10초 업로드는 대기 상한(45s) 계산에 포함되며, 이 조합에서만 상한을 넘는다** (이 조합은 실측하지 않음, 계산값)
 
 ### 중요한 발견
-- **keep-alive 가 켜진 첫 구현에서 Kubo 5001 을 NetworkPolicy 로 막은 뒤에도 업로드가 성공했다** (m3-02 첫 실행, 차단 확인 PASS 이후 요청이 cid 를 받음). 원인은 기존 연결 재사용으로 추정(연결 상태까지 추적하지는 않음). `DisableKeepAlives` 로 바꾸자 차단이 곧바로 실패로 나타났다. 대가: 업로드마다 TCP 연결 1회(클러스터 내부, 실측 업로드 1~17ms)
-- **이 클러스터의 NetworkPolicy 는 차단 시 연결을 거부(REJECT)한다**: 차단 중 요청이 0.12~0.56s 에 실패. 그래서 `m3-02.sh` 의 차단 검사로는 **실제 10초 timeout 경로(패킷이 사라지는 black-hole)를 클러스터에서 관측하지 못했다.** 10초 경로는 단위 테스트(블로킹 업로더 + timeout 200ms 로 줄인 부분 실패 검증, ctx deadline 10초 검증)로만 확인
+- **keep-alive 를 끈 이유와 범위**: NetworkPolicy 는 새 연결만 막는다. keep-alive 가 켜진 첫 구현에서는 Kubo 5001 을 막은 뒤에도 재사용 연결로 업로드가 성공해서(m3-02 첫 실행) 차단 테스트가 성립하지 않았다. 클러스터 내부라 연결 비용은 무시할 만하다(실측 업로드 1~17ms). **범위는 IPFS client 전용 `http.Transport` 하나뿐이다**: `backend/internal/ipfs/client.go` 의 `New()` 가 `http.DefaultTransport.(*http.Transport).Clone()` 에 `DisableKeepAlives=true` 를 건다 (DefaultTransport 자체는 안 바꿈). compiler client(`execute/compiler_client.go`)는 diff 0줄, 전역 설정 변경 없음 (`grep DisableKeepAlives|DefaultTransport` 로 확인)
+- **이 클러스터의 NetworkPolicy 는 차단 시 연결을 거부(REJECT)한다**: 차단 중 요청이 0.12~0.56s 에 실패. 그래서 NetworkPolicy 차단 검사로는 10초 timeout 경로를 못 잰다. **실제 10초 timeout 은 별도 검사로 실측했다**: `docker exec k3d-lgtm-server-0` 로 `ipfs daemon` PID 를 찾아 `kill -STOP` (커널은 연결을 받지만 응답이 없음) → 요청 → 응답 10.09~10.15s, `timings_ms.ipfs_upload=10001ms`, cid/ipfs_url null, 실행 status 그대로, `ipfs.upload` span ERROR, root 비-ERROR → trap 에서 `kill -CONT`, 5001 응답 복구 poll(실측 0.32s). 이 동안 Kubo 컨테이너 restartCount 0 → 0 (liveness/readiness 가 tcpSocket 이라 정지 중에도 통과). 종료 후 `ipfs daemon` 상태 S(실행 중), kubo-ingress 포트 5001 8080 4001 4001 복구 확인
 
 ### 검증표 (VM `lgtm-vm`, 로그 `~/lgtm-logs/m3-02-*.log`)
 | 주장 | 확인 방법 | 결과 |
@@ -45,14 +45,16 @@
 | `rustcVersion`(1.99.1) == `Dockerfile.compiler` 태그 | m3-02.sh | 확인(VM) |
 | 단위 테스트 `go test ./internal/...` | **VM 에서 docker `golang:1.27.3-trixie` 이미지로 실행** (VM 에 Go 설치 안 함, m2-04 와 같은 방식). 개발 중 Mac 에서도 `go test ./internal/execute ./internal/ipfs` 실행했으나 그건 검증으로 안 침 | 확인(VM) |
 | `make clean && make` exit 0 (144s), 재실행 `make` exit 0 (20s), `make verify` 전체 exit 0 (2755s, m3-02 포함) | `m3-02-final-make1/2.log`, `m3-02-final-verify.log` | 확인(VM) |
+| **실제 10초 timeout**: Kubo daemon `kill -STOP` → 요청 | `m3-02-m-run.log`, `m3-02-m-verify.log` | 확인(VM): 정지 확인 poll(상한 40s, 실측 3.06s) 후 응답 10.09~10.15s(10~13s), `ipfs_upload=10001ms`, cid/ipfs_url null, status 그대로, `ipfs.upload` span ERROR, root 비-ERROR. `kill -CONT` 후 5001 복구 poll(상한 40s, 실측 0.32s), 복구 후 요청이 다시 같은 CID. **Kubo 컨테이너 restartCount 0 → 0** (두 번 모두) |
+| origin/main(a843b1c, F-M3-03 포함) merge 후 `make build deploy` → m3-02.sh → `make verify` 전체 (make clean 은 앞서 수행해 생략) | `m3-02-m-build.log` `BUILD_DEPLOY_EXIT=0` 20s, `m3-02-m-run.log` `M302_EXIT=0` 73s ALL PASS, `m3-02-m-verify.log` `VERIFY_EXIT=0` 588s | 확인(VM). `VERIFY_ALL` = m1-01…m2-04, m3-01, m3-02, m4-01, m4-02, m6-03, m3-03 전부 포함, HANDOFF 블록 F-M3-02/F-M3-03/F-M6-03/F-M2-04 유지 |
 | m3-02.sh 최종 | `m3-02-run2.log` | 확인(VM): 65 PASS, ALL PASS (약 52s) |
 
 ### 안 된 것 / 미확인
-- 실제 10초 timeout 경로(black-hole)는 클러스터에서 **미확인** (위)
+- 10초 timeout 은 `kill -STOP` 방식으로 실측했다. NetworkPolicy 의 패킷 drop(black-hole) 방식은 이 클러스터가 REJECT 라 재현하지 못했다 (STOP 은 커널이 연결만 받고 응답이 없는 경우로, 응답 없음 상황의 대표로 본다)
 - frontend 는 수정하지 않았다. `ResultView.tsx` 는 `ipfs_url` null → "공유 링크 생성 실패(IPFS timeout)" 를 렌더링하는 기존 코드이며, 브라우저에서 실제 null 응답을 렌더링해 본 것은 **미확인** (frontend 단위 테스트는 `make build` 의 Docker build 단계에서 통과)
 - Kubo 응답 지연(느린 add) 시의 업로드 시간 분포는 측정하지 않았다 (실측: 작은 디렉토리 1~17ms)
 - ipfs.io 링크(ResultView 의 PUBLIC_IPFS)는 F-M3-03 에서 확인한 대로 현재 HTTP 요청이 거부된다. 이번 범위 밖
-- 이 브랜치는 origin/main(4e957d0) 기준이라 F-M3-03 (`m3-03`) 이 없다. F-M3-03 머지 시 `Makefile` 의 `VERIFY_ALL` 이 충돌한다 (m3-02 와 m3-03 둘 다 남기기)
+- origin/main(a843b1c, F-M3-03 포함)을 merge 해 `VERIFY_ALL` 과 HANDOFF 충돌을 해결했다 (둘 다 유지)
 
 ### 다음 단계
 - F-M5-01 instrumentation (TR-03/04 나머지 attribute, bucket)
