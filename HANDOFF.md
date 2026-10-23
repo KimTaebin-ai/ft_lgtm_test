@@ -63,9 +63,12 @@ first_blocked=utm (inferred). 관측한 것:
 - UTM (문서 확인, 변경은 사용자): "Port forwarding is only available on QEMU backend virtual machines using Emulated VLAN network mode" (docs.getutm.app/settings-qemu/devices/network/port-forwarding/). **현재 VM 은 QEMU + Shared Network 라 문서상 UTM 포워딩을 쓸 수 없다**(Shared 에서의 포워딩은 문서에 언급 없음 = 지원 문서 없음). 선택지: ① Emulated VLAN 으로 바꾸고 4001 tcp/udp 포워딩 + 공유기 포워딩(두 겹), ② Bridged(VM 이 LAN IP 를 직접 받음 → 공유기 포워딩 한 겹. 문서는 "advanced, Wi-Fi 는 추가 설정"만 언급, 포워딩과의 관계는 추론)
 - 디펜스 대안: 모바일 핫스팟(통신사 CGNAT 면 인바운드 불가일 수 있음, 미검증), 공유기 포워딩 가능한 망, 안 되면 `make ipfs-check` 출력으로 막힌 층과 relay 한계를 설명
 - ipfs.io 는 위 PRD 영향 참고
+- **m3-03 verify PASS 의 의미**: "진단 스크립트가 끝까지 동작하고 정해진 형식으로 출력한다"이지 **외부 접근 성공이 아니다.** 같은 실행에서 S4 FAIL, S9 0/5 였다. README 에 "IPFS 외부 접근 확인됨"으로 쓰면 안 된다
+- **ipfs.io 429**: 응답 본문이 `switching to a service worker gateway only`. 2026년 service worker gateway 전환 정책 때문으로 보이며(https://gatewaychanges.ipfs.io 에 종료 일정만 있고 ipfs.io/dweb.link 도메인을 명시하지는 않음), **브라우저에서의 동작(service worker 경유로 열리는지)은 측정하지 않았다.** curl 요청만 측정
+- **relay(limited connection) 위 bitswap 이 동작하지 않는가 — 미확인(정황만)**: ① libp2p 스펙(https://raw.githubusercontent.com/libp2p/specs/master/relay/circuit-v2.md)은 relay 연결에 duration/data 제한이 있다고만 하고 protocol 별 opt-in 은 언급하지 않는다. ② go-libp2p `core/network/context.go` 의 `WithAllowLimitedConn` 주석: "instructs the network that it is acceptable to use a limited connection when opening a new stream". 기본 동작(옵션 없을 때 거부)은 그 주석에 적혀 있지 않아 **추론**이다. ③ boxo `bitswap/network/bsnet/ipfs_impl.go`(main 브랜치 raw, 질의 응답 기준)는 `NewStream`/`SetStreamHandler` 에 `WithAllowLimitedConn` 을 쓰지 않고 `conn.Stat().Limited` 연결은 건너뛴다. 단 이것은 **main 이지 Kubo v0.43.1 이 쓰는 boxo 버전이 아니다.** ④ 유사 사례: Helia `@helia/bitswap` 은 `runOnLimitedConnection` 옵션을 쓴다, discuss.ipfs.tech/t/connection-closes-during-bitswap-fetches/17041 는 relay data limit 으로 bitswap 이 끊긴 보고. 결론: 우리 실측(connect 는 되지만 블록 0)과 방향은 맞지만 **원인으로 확정하지 않는다 (미확인)**. 확정하려면 Kubo v0.43.1 의 go.mod boxo 버전 소스 확인 또는 `Swarm` 로그 수집이 필요
 
 ### 다음 단계
-- F-M5-01 instrumentation
+- F-M3-02 ipfs-upload (F-M5-01 instrumentation 은 F-M3-02 에 의존하므로 그 다음)
 - 승인 필요: IP-06 문구 변경, UTM 네트워크 모드 변경(사용자 수행) 후 `make ipfs-check` 재실행
 
 ## F-M6-03 image-prefetch (브랜치 feat/m6-03-image-prefetch)
