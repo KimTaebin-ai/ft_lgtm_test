@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"lgtm/backend/internal/compile"
+	"lgtm/backend/internal/httpserver"
 	"lgtm/backend/internal/telemetry"
 )
 
@@ -41,11 +42,8 @@ func run() error {
 	log := tel.Logger
 	slog.SetDefault(log)
 
-	workDir := os.Getenv("WORK_DIR")
-	if workDir == "" {
-		workDir = "/work"
-	}
-	cleanWorkDir(log, workDir)
+	workDir := httpserver.Getenv("WORK_DIR", "/work")
+	cleanWorkDir(log, workDir) // 시작 시 1회 (서버 시작 전). Shutdown 뒤 정리는 없다.
 
 	runner := compile.NewRunner(log, workDir, compile.DefaultConcurrency)
 
@@ -60,28 +58,7 @@ func run() error {
 		otelhttp.WithSpanNameFormatter(func(string, *http.Request) string { return SpanName }),
 	))
 
-	addr := os.Getenv("LISTEN_ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
-	log.InfoContext(ctx, "compiler listening", "addr", addr, "work_dir", workDir)
-
-	select {
-	case err = <-errCh:
-	case <-ctx.Done():
-		log.InfoContext(context.Background(), "shutdown signal received")
-		sctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		err = srv.Shutdown(sctx)
-	}
-	if errors.Is(err, http.ErrServerClosed) {
-		err = nil
-	}
-	log.InfoContext(context.Background(), "compiler stopped")
+	err = httpserver.Run(ctx, log, "compiler", httpserver.Getenv("LISTEN_ADDR", ":8080"), mux, 20*time.Second, "work_dir", workDir)
 	return errors.Join(err, tel.Shutdown())
 }
 
