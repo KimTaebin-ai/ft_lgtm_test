@@ -39,6 +39,10 @@ LGTM is a Rust playground that you can fully observe. In the browser you write a
 
 ### Install and run
 
+Requirements: a user that can run `sudo`, and Internet access for the first `make` (apt packages, the Docker/kubectl/Helm/k3d binaries, container images and the Rust/Go/Node base images are downloaded).
+
+> **sudo on a fresh Debian:** if you set a root password during installation, the first user is *not* in the `sudo` group (and `sudo` may not be installed). Either leave the root password empty when installing Debian, or run `su -c 'apt install -y sudo && usermod -aG sudo <user>'` and log in again.
+
 Inside the VM:
 
 ```bash
@@ -47,7 +51,13 @@ git clone <this repository> lgtm && cd lgtm
 make
 ```
 
-`make` runs `install`, `cluster`, `build`, `deploy` and `hosts` in order. It installs Docker, kubectl, Helm and k3d at pinned versions, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), deploys observability → IPFS → app, and writes the host names to the VM's `/etc/hosts`. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe.
+`make` asks for the sudo password **once, right at the start**, and then runs `install`, `hosts`, `cluster`, `build` and `deploy` in that order. All sudo use (apt, Docker, the binaries in `/usr/local/bin`, `/etc/hosts`) happens in `install` and `hosts`, well inside sudo's 15-minute timestamp, so it does not ask again later. It installs Docker, kubectl, Helm, k3d and the Korean font `fonts-noto-cjk` at pinned versions, writes the host names to the VM's `/etc/hosts`, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), and deploys observability → IPFS → app. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe (if the sudo timestamp has expired it asks for the password once more). The run ends with `ingress ready: lgtm.local`.
+
+Expected duration on a fresh VM: TBD (to be measured on a fresh VM).
+
+Start over: `make fclean` removes the cluster, the locally built images and the `/etc/hosts` block; `make re` does `fclean` and then `make`.
+
+After a VM reboot: `make install` enables Docker at boot, and `scripts/verify/m6-02-fresh-vm.sh` checks the restart policy of the k3d node containers. Log in after the reboot and run `scripts/tools/reboot-check.sh`; it passes when all pods are Running and `lgtm.local` answers 200 within 3 minutes of boot (fresh-VM result: TBD).
 
 ### Addresses (open them in Firefox **inside the VM**)
 
@@ -222,6 +232,10 @@ Bridged removes the UTM layer, but the router would still have to forward 4001 (
 - `trustless-gateway.link`, `4everland.io`: gateway-side errors (522 / 504).
 - The external reachability probe backend could not be reached from the VM (timeout), so that step is reported as `SKIP`.
 
+Subject authors confirmed (world_beta, 2026-10-23) that explaining a campus network limitation is acceptable, and that a service worker gateway such as inbrowser.link or any public gateway may be used instead of ipfs.io.
+
+The playground's public link therefore points to `https://inbrowser.link/ipfs/<cid>` instead of `ipfs.io` (whether it opens there was **not measured** here; it still depends on our node being reachable).
+
 To show a working public fetch in a defence you need a network where the router can forward 4001 (or another network where inbound connections work). Otherwise present the `make ipfs-check` output and explain the layer that blocks.
 
 ## Demo walkthrough
@@ -238,8 +252,8 @@ To show a working public fetch in a defence you need a network where the router 
 
 | Command | What it does |
 |---|---|
-| `make` | `install` + `cluster` + `build` + `deploy` + `hosts` |
-| `make install` | Install Docker, kubectl, Helm, k3d (pinned, idempotent, arch-aware) |
+| `make` | `sudo-auth` (asks the sudo password once) + `install` + `hosts` + `cluster` + `build` + `deploy` |
+| `make install` | Install Docker, kubectl, Helm, k3d (pinned, idempotent, arch-aware) and `fonts-noto-cjk` |
 | `make cluster` | Prefetch k3s/k3d images, create the k3d cluster (80/443 and 4001 tcp/udp mapped) |
 | `make images` | Prefetch all external images and import the workload images into k3d |
 | `make build` | Build backend, compiler and frontend images locally (the frontend build runs lint and tests) and import them into k3d |
@@ -249,9 +263,11 @@ To show a working public fetch in a defence you need a network where the router 
 | `make verify` | Run all `scripts/verify/*` checks in order, stopping at the first failure (VM/Linux only; takes several minutes) |
 | `make verify-m1` | Only the first-milestone checks |
 | `make ipfs-check` | IPFS and NAT diagnosis, see [IPFS and NAT](#ipfs-and-nat) (not part of `make`) |
-| `make clean` | Delete the k3d cluster (leaves `/etc/hosts` alone) |
+| `make clean` | Delete the k3d cluster (leaves `/etc/hosts` and images alone) |
+| `make fclean` | `clean` + remove the locally built `lgtm-backend` / `lgtm-compiler` / `lgtm-frontend` images + remove the `/etc/hosts` block (external images, apt packages and binaries stay) |
+| `make re` | `fclean`, then `make` |
 
-Iterating after a code change: `make build deploy` is enough; `make clean && make` is only for a from-scratch check.
+Iterating after a code change: `make build deploy` is enough; `make re` is only for a from-scratch check.
 
 **Rolling restarts.** Right after a rollout, requests used to hang for exactly 30 s and end in a `504`: Traefik was slow to drop the old pod's endpoint, so it kept sending requests to a terminating pod whose SYN packets were discarded. The backend and frontend pods now have a 10 s `preStop` sleep (and the backend a longer termination grace period and shutdown limit), so the old pod keeps serving until Traefik has caught up. `scripts/verify/m6-04-stability.sh` restarts each deployment while sending requests and requires zero non-200 responses; it passed twice after the fix. The upper bound of Traefik's delay was not measured (10 s is a margin), and replicas above 1 or a heavily loaded node were not tested.
 

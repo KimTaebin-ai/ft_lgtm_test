@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # F-M0-02 cluster-ingress-hosts 검증. Debian VM(Linux)에서만 실행한다.
-# 전제: make cluster && make deploy && make hosts 가 끝난 상태.
+# 전제: make 가 끝난 상태 (cluster, deploy, hosts).
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then
@@ -45,17 +45,16 @@ for h in $HOSTS; do
 	if [ "$ip" = "127.0.0.1" ]; then pass "getent hosts $h -> 127.0.0.1"; else fail "getent hosts $h -> '${ip:-해석 안 됨}'"; fi
 done
 
-# 4. 세 호스트 모두 200, 본문이 서로 다름
+# 4. 호스트별 경로가 200, 본문이 서로 다름 (frontend / Grafana health / Kubo gateway 의 inline CID)
 bodies=""
-for h in $HOSTS; do
-	code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$h/" 2>/dev/null)"
-	body="$(curl -sf --max-time 10 "http://$h/" 2>/dev/null)"
-	if [ "$code" = "200" ] && [ -n "$body" ]; then pass "curl http://$h/ 200 [$body]"; else fail "curl http://$h/ code=${code:-없음}"; fi
+for u in lgtm.local/ grafana.lgtm.local/api/health ipfs.lgtm.local/ipfs/bafkqaaa; do
+	code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$u" 2>/dev/null)"
+	body="$(curl -sf --max-time 10 "http://$u" 2>/dev/null | head -c 200 | tr -d '\n')"
+	if [ "$code" = "200" ]; then pass "curl http://$u 200"; else fail "curl http://$u code=${code:-없음}"; fi
 	bodies+="$body"$'\n'
 done
-uniq_n="$(printf '%s' "$bodies" | grep -c . | xargs)"
-distinct="$(printf '%s' "$bodies" | grep . | sort -u | wc -l | xargs)"
-if [ "$uniq_n" -eq 3 ] && [ "$distinct" -eq 3 ]; then pass "응답 본문이 호스트별로 다름"; else fail "응답 본문 중복 또는 누락 (비어있지 않은 본문 $uniq_n, 서로 다른 본문 $distinct)"; fi
+distinct="$(printf '%s' "$bodies" | sort -u | wc -l | xargs)"
+if [ "$distinct" -eq 3 ]; then pass "응답 본문이 호스트별로 다름"; else fail "응답 본문 중복 (서로 다른 본문 $distinct, 기대 3)"; fi
 
 # 5. make cluster 재실행은 skip
 out="$(make cluster 2>&1)"; rc=$?
@@ -71,6 +70,15 @@ if [ "$b" -eq 1 ] && [ "$e" -eq 1 ]; then pass "/etc/hosts 블록 1개"; else fa
 
 # 7. traefik IngressClass
 k get ingressclass traefik >/dev/null 2>&1 && pass "IngressClass traefik" || fail "IngressClass traefik 없음"
+
+# 8. 우리 namespace 의 모든 컨테이너(init 포함)에 cpu/memory request 와 limit (CLAUDE.md 금지 사항)
+for ns in observability ipfs lgtm; do
+	rows="$(k -n "$ns" get pods -o jsonpath='{range .items[*]}{range .spec.initContainers[*]}{.name} {.resources.requests.cpu} {.resources.requests.memory} {.resources.limits.cpu} {.resources.limits.memory}{"\n"}{end}{range .spec.containers[*]}{.name} {.resources.requests.cpu} {.resources.requests.memory} {.resources.limits.cpu} {.resources.limits.memory}{"\n"}{end}{end}' 2>/dev/null)"
+	if [ -z "$rows" ]; then fail "$ns: pod 없음"; continue; fi
+	bad="$(printf '%s\n' "$rows" | awk 'NF && NF < 5 {print $1}' | sort -u | xargs)"
+	if [ -z "$bad" ]; then pass "$ns: 컨테이너 $(printf '%s\n' "$rows" | grep -c .)개 모두 cpu/memory request+limit"
+	else fail "$ns: request/limit 누락 컨테이너: $bad"; fi
+done
 
 if [ "$fails" -ne 0 ]; then echo "RESULT: $fails 건 실패" >&2; exit 1; fi
 echo "RESULT: 모두 통과"

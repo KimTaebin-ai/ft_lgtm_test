@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# docker, kubectl, helm, k3d 설치 (idempotent, amd64/arm64 자동 감지).
+# docker, kubectl, helm, k3d, 한글 폰트(fonts-noto-cjk) 설치 (idempotent, amd64/arm64 자동 감지).
 # 버전은 Makefile 상단 변수에서 export 된다. 이미 같은 버전이면 "[skip] <tool> <ver>"만 출력한다.
 set -euo pipefail
 
@@ -52,6 +52,7 @@ docker_ok() {
 	[ "$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null || true)" = "$DOCKER_VERSION_STR" ] \
 		&& [ "$(dpkg-query -W -f='${Version}' docker-ce-cli 2>/dev/null || true)" = "$DOCKER_VERSION_STR" ] \
 		&& systemctl is-active --quiet docker \
+		&& systemctl is-enabled --quiet docker \
 		&& user_in_docker_group
 }
 
@@ -92,6 +93,18 @@ install_docker() {
 	"$(dirname "${BASH_SOURCE[0]}")/../lib/with-docker.sh" docker info >/dev/null \
 		|| die "docker 그룹 권한으로 docker info 실패"
 	cleanup; TMP=""
+}
+
+# ---------- 폰트 ----------
+# VM 안 Firefox 에서 한국어 UI·출력(ipfs.lgtm.local 의 output.txt 등)이 깨지지 않게 한다
+install_fonts() {
+	if [ "$(dpkg-query -W -f='${Status}' fonts-noto-cjk 2>/dev/null || true)" = "install ok installed" ]; then
+		echo "[skip] fonts-noto-cjk"
+		return
+	fi
+	echo "[install] fonts-noto-cjk"
+	$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update
+	apt_install fonts-noto-cjk
 }
 
 # ---------- kubectl ----------
@@ -149,6 +162,7 @@ install_k3d() {
 }
 
 install_docker
+install_fonts
 install_kubectl
 install_helm
 install_k3d
