@@ -125,15 +125,40 @@ func NewHandler(log *slog.Logger, tp trace.TracerProvider, m *telemetry.Metrics,
 	)
 }
 
+// ServeHTTP는 단계 순서만 보인다: 요청 해석/검증 → 큐 슬롯 → compile → execute → ipfs.upload → 슬롯 반환 → 응답.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ctx := r.Context()
 	root := trace.SpanFromContext(ctx)
 
+	req, ok := h.readRequest(ctx, w, r, root)
+	if !ok {
+		return
+	}
+	release, ok := h.acquireSlot(ctx, w, root)
+	if !ok {
+		return
+	}
+	defer release()
+
+	resp := response{Status: statusSuccess, TraceID: root.SpanContext().TraceID().String()}
+	var exitCode *int // 실행 전에 끝난 요청(compile 실패 등)은 nil → status.json 의 exit_code: null
+	if wasm, ok := h.compile(ctx, root, req.Code, &resp); ok {
+		exitCode = h.execute(ctx, root, wasm, &resp)
+	}
+	h.upload(ctx, root, req.Code, exitCode, &resp)
+	release() // 응답 쓰기 전에 슬롯 반환 (느린 클라이언트가 슬롯을 쥐지 않게)
+
+	h.writeResult(ctx, w, root, req.Language, start, resp)
+}
+
+// readRequest는 body를 읽고 검증한다. 실패하면 413/400 응답을 쓰고 false를 돌려준다.
+// 성공하면 root span에 code.* attribute를 남긴다.
+func (h *handler) readRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, root trace.Span) (request, bool) {
 	// 413: Content-Length가 크면 본문을 읽지 않고 거부하고, 아니면 MaxBytesReader로 읽는 양 자체를 제한한다.
 	if r.ContentLength > maxBodyBytes {
 		h.tooLarge(ctx, w, root)
-		return
+		return request{}, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req request
@@ -141,14 +166,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
 			h.tooLarge(ctx, w, root)
-			return
+			return request{}, false
 		}
 		h.invalid(ctx, w, "요청 본문이 올바른 JSON이 아닙니다")
-		return
+		return request{}, false
 	}
 	if req.Language != "rust" || strings.TrimSpace(req.Code) == "" {
 		h.invalid(ctx, w, `language는 "rust", code는 비어 있지 않아야 합니다`)
-		return
+		return request{}, false
 	}
 
 	sum := sha256.Sum256([]byte(req.Code))
@@ -159,53 +184,59 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("code.size_bytes", len(req.Code)),
 	)
 	h.log.InfoContext(ctx, "execute request received", "code_size_bytes", len(req.Code))
+	return req, true
+}
 
-	// 큐: 400/413은 슬롯을 쓰지 않는다. 가득 차면 즉시 429, 대기 중 클라이언트가 끊으면 자리가 반환된다.
+// acquireSlot은 큐 슬롯을 잡는다. 실패하면 queueRejected가 429를 쓰고(클라이언트가 끊었으면 응답 없음) false를 돌려준다.
+// 큐: 400/413은 슬롯을 쓰지 않는다. 가득 차면 즉시 429, 대기 중 클라이언트가 끊으면 자리가 반환된다.
+func (h *handler) acquireSlot(ctx context.Context, w http.ResponseWriter, root trace.Span) (func(), bool) {
 	release, qwait, qerr := h.lim.Acquire(ctx)
 	if qerr != nil {
 		h.queueRejected(ctx, w, root, qerr)
-		return
+		return nil, false
 	}
-	defer release()
 	root.SetAttributes(attribute.Int64("queue.wait_ms", qwait.Milliseconds()))
 	// 대기 0도 기록한다. execution_duration은 큐 대기를 포함하므로 stage로 나눠야 지연 원인을 구분할 수 있다.
 	h.metrics.RecordStage(ctx, "queue", qwait)
+	return release, true
+}
 
-	resp := response{Status: statusSuccess, TraceID: root.SpanContext().TraceID().String()}
-	var exitCode *int // 실행 전에 끝난 요청(compile 실패 등)은 nil → status.json 의 exit_code: null
-
-	// compile: compiler 서비스 호출. step의 span ctx로 호출해야 rustc span의 parent가 compile이 된다.
+// compile은 compile 단계를 실행한다. 실패하면 resp에 compile_error/internal_error를 채우고 root span을 ERROR로 표시한 뒤 false를 돌려준다.
+// compiler 서비스 호출은 step의 span ctx로 해야 rustc span의 parent가 compile이 된다.
+func (h *handler) compile(ctx context.Context, root trace.Span, code string, resp *response) ([]byte, bool) {
 	var wasm []byte
 	var cErr error
 	resp.TimingsMS.Compile, cErr = h.step(ctx, "compile", trace.SpanKindClient, func(ctx context.Context, span trace.Span) error {
 		var err error
 		h.log.InfoContext(ctx, "compile started")
-		wasm, err = h.compiler.compile(ctx, req.Code)
+		wasm, err = h.compiler.compile(ctx, code)
 		if err == nil {
 			span.SetAttributes(attribute.Int("wasm.size_bytes", len(wasm)))
 			h.log.InfoContext(ctx, "compile finished", "wasm_bytes", len(wasm))
 		}
 		return err
 	})
-	if cErr != nil {
-		var ue *userError
-		if errors.As(cErr, &ue) {
-			resp.Status = statusCompileError
-			resp.Message = ue.Message
-			resp.Stderr = ue.Stderr
-		} else {
-			resp.Status = statusInternalError
-			resp.Message = "internal error: " + cErr.Error()
-		}
-		cls, _ := failClass(cErr, "compile")
-		telemetry.FailSpan(root, cls)
-	} else {
-		exitCode = h.execute(ctx, root, wasm, &resp)
+	if cErr == nil {
+		return wasm, true
 	}
+	var ue *userError
+	if errors.As(cErr, &ue) {
+		resp.Status = statusCompileError
+		resp.Message = ue.Message
+		resp.Stderr = ue.Stderr
+	} else {
+		resp.Status = statusInternalError
+		resp.Message = "internal error: " + cErr.Error()
+	}
+	cls, _ := failClass(cErr, "compile")
+	telemetry.FailSpan(root, cls)
+	return nil, false
+}
 
-	// ipfs.upload: 실패한 실행도 업로드한다 (BE-05). 업로드 실패/timeout은 부분 실패다: ipfs.upload span만 ERROR로 두고
-	// 응답 status와 root span은 실행 결과 그대로 유지하며 cid/ipfs_url은 null이다 (BE-10). 코드 원문은 로그에 남기지 않는다.
-	files := buildFiles(req.Code, resp, exitCode)
+// upload는 ipfs.upload 단계다. 실패한 실행도 업로드한다 (BE-05). 업로드 실패/timeout은 부분 실패다: ipfs.upload span만 ERROR로 두고
+// 응답 status와 root span은 실행 결과 그대로 유지하며 cid/ipfs_url은 null이다 (BE-10). 코드 원문은 로그에 남기지 않는다.
+func (h *handler) upload(ctx context.Context, root trace.Span, code string, exitCode *int, resp *response) {
+	files := buildFiles(code, *resp, exitCode)
 	var cid string
 	var uErr error
 	resp.TimingsMS.IPFSUpload, uErr = h.step(ctx, "ipfs.upload", trace.SpanKindInternal, func(ctx context.Context, span trace.Span) error {
@@ -226,12 +257,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp.CID, resp.IPFSURL = &cid, &url
 		root.SetAttributes(attribute.String("ipfs.cid", cid))
 	}
-	release() // 응답 쓰기 전에 슬롯 반환 (느린 클라이언트가 슬롯을 쥐지 않게)
+}
 
+// writeResult는 최종 status를 root span과 metric에 남기고 200 JSON 응답을 쓴다.
+func (h *handler) writeResult(ctx context.Context, w http.ResponseWriter, root trace.Span, language string, start time.Time, resp response) {
 	h.log.InfoContext(ctx, "execute request done", "status", resp.Status)
 	root.SetAttributes(attribute.String("lgtm.status", resp.Status))
 	// root span은 otelhttp가 ServeHTTP 반환 뒤에 End한다. 그 전에 root ctx로 기록해야 exemplar에 trace_id가 붙는다.
-	h.metrics.RecordExecution(ctx, resp.Status, req.Language, time.Since(start))
+	h.metrics.RecordExecution(ctx, resp.Status, language, time.Since(start))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
