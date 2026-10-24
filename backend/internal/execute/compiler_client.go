@@ -26,20 +26,6 @@ const (
 	maxStderrBytes = 64 << 10
 )
 
-// userError는 사용자 코드가 원인인 compile 실패(rustc 에러, 15초 timeout)다 → status compile_error.
-// 이 타입이 아닌 에러(연결 실패, 그 외 5xx, wasm 크기 초과)는 플랫폼 문제로 보고 internal_error가 된다.
-type userError struct {
-	Message string
-	Stderr  string
-	// Class는 span/event/로그에 쓰는 분류형 문구다. Message(rustc 첫 줄)는 사용자 식별자를 인용할 수 있어 쓰지 않는다.
-	Class string
-}
-
-func (e *userError) Error() string { return e.Message }
-
-// SpanMessage는 telemetry.Classified를 구현한다.
-func (e *userError) SpanMessage() string { return e.Class }
-
 // classRe는 compiler가 보낸 분류 문구의 형태다 ("rustc failed [E0425]", "source denied [deny-rename]"). 이 밖의 값은 버린다.
 var classRe = regexp.MustCompile(`^(rustc failed|source denied)( \[[A-Za-z0-9-]{1,40}\])?$`)
 
