@@ -10,6 +10,44 @@
 ### 다음 단계
 -->
 
+## F-M6-02 fresh-vm (브랜치 feat/m6-02-fresh-vm)
+
+진행 방식 변경(사용자 지시): 개발 VM은 쓰지 않는다. 검증은 사용자가 새 VM(192.168.64.8) 콘솔에서 하고, Claude Code는 이 VM에 ssh로 접속하지 않는다. 로컬(macOS)에서는 bash -n, shellcheck, make -n, hosts.sh 임시 파일 테스트만 했다(검증으로 치지 않음).
+
+### 한 일
+- m6-02-fresh-vm.sh를 먼저 커밋했다(cab1ee2). 검사 항목: 폰트, fclean/re 구현, `all` 순서, 대기 600s, inbrowser.link, 출제자 문구 정확 일치, make -n, VERIFY_ALL, 재부팅 내성 설정.
+- install.sh: `install_fonts`(fonts-noto-cjk, 이미 있으면 `[skip]`)를 추가했다. `docker_ok`에 `systemctl is-enabled --quiet docker`를 넣었다. 지금까지 `enable --now`는 설치 경로에서만 실행돼서, docker가 설치돼 있지만 disabled인 VM은 `[skip]`되고 재부팅 후 docker가 올라오지 않았다.
+- Makefile:
+  - `all: sudo-auth install hosts cluster build deploy`로 바꿨다.
+  - `sudo-auth`를 추가했다: root이거나 `sudo -n true`가 되면 그냥 넘어가고, sudo가 없으면 안내 후 실패, 아니면 `sudo -v`.
+  - `fclean`(sudo-auth → clean → `lgtm-(backend|compiler|frontend):*` rmi → `hosts.sh --remove`)과 `re`(recipe 안에서 fclean 다음 all)를 구현했다.
+  - VERIFY_ALL 맨 앞에 m0-01과 m0-02, 끝에 m6-02를 넣었다.
+- **계획과 다른 점**: 계획은 `install`, `hosts` 단독 실행에도 sudo-auth를 prerequisite로 붙이기로 했지만 붙이지 않았다. 붙이면 m0-01(`make install`)과 m0-02(`make hosts`)가 긴 `make verify` 도중 타임스탬프가 만료된 시점에 비밀번호를 묻고 멈춘다. 둘 다 이미 설치된 상태에서는 sudo를 부르지 않으므로 없어도 된다. sudo-auth는 `all`과 `fclean`에만 붙어 있다.
+- cluster.sh: 대기 상한을 `WAIT_TIMEOUT=600` 하나로 맞췄다(create --timeout, node Ready, traefik 생성 poll, traefik rollout, 오류 문구).
+- hosts.sh: `--remove`를 추가했다(블록만 제거, 블록이 없으면 `[skip]`).
+- m0-01: fonts-noto-cjk와 docker enabled 검사를 추가했고, `[skip]` 기대값을 4줄에서 5줄로 바꿨다.
+- m0-02:
+  - (4) 호스트별 경로 `lgtm.local/`, `grafana.lgtm.local/api/health`, `ipfs.lgtm.local/ipfs/bafkqaaa`가 200이고 본문 3개가 서로 다른지 본다.
+  - (8) observability, ipfs, lgtm의 모든 컨테이너(init 포함)에 cpu/memory request와 limit이 있는지 본다.
+- FE: `PUBLIC_IPFS = 'https://inbrowser.link/ipfs/'`, 링크 텍스트, ResultView.test.tsx 기대값을 바꿨다.
+- README:
+  - Instructions: 사전 조건, sudo 함정, 시작 직후 비밀번호 1회, 폰트, 소요 시간 `TBD`, fclean/re, 재부팅 확인 방법을 적었다.
+  - IPFS and NAT: 출제자 문장과 inbrowser.link(동작 미측정)를 적었다.
+  - Make targets: fclean, re 행을 추가했다.
+- scripts/tools/reboot-check.sh를 새로 만들었다: 부팅 후 N초(기본 180) 안에 pod가 전부 Running(+Ready) 또는 Completed가 되고 `curl --resolve lgtm.local:80:127.0.0.1`이 200이면 PASS.
+
+### 된 것
+- 로컬 정적 검사만 했다. 변경한 스크립트는 `bash -n`과 `shellcheck -S warning`에서 문제가 없었다(rc 0). `make -n all/sudo-auth/install/hosts/fclean/re/verify/clean`도 모두 됐다. hosts.sh는 임시 파일로 추가 → skip → 제거 → skip을 확인했다.
+
+### 안 된 것 (사용자가 새 VM에서 실행 → 결과 대기)
+- m6-02 FAIL 확인(cab1ee2 기준), `make` 소요 시간, `make verify` 전체, 재부팅 후 3분 안에 회복, `make` 재실행, `make re`, Firefox 한글 표시.
+- k3d 노드 컨테이너 restart policy(`docker inspect`): 새 VM 결과를 받으면 여기에 적는다. m6-02 9번이 always 또는 unless-stopped인지 검사한다.
+- inbrowser.link에서 실제로 열리는지는 측정하지 않았다.
+- vitest(ResultView.test.tsx)는 새 VM의 `make build`(frontend Dockerfile) 안에서 실행된다. 로컬에는 node_modules가 없어서 돌리지 않았다.
+
+### 다음 단계
+- 사용자 결과로 README의 소요 시간과 재부팅 결과 `TBD`를 채우고, Known limitations의 "Full `make verify` on a fresh VM" 줄을 갱신한다.
+
 ## F-M6-06 backend-refactor (브랜치 feat/m6-06-backend-refactor)
 
 backend/ Go 코드 구조만 바꿨다. 응답, span, metric, 로그 문구와 속성 키, 큐 슬롯 반환 시점은 그대로다. 테스트 파일은 고치지 않았다.
