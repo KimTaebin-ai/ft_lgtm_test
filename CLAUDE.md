@@ -12,15 +12,16 @@ IPFS: Kubo / OTel Collector (contrib) → Tempo, Mimir (monolithic), Loki / Graf
 
 ## 구조
 
-backend/ frontend/ k8s/ dashboards/ scripts/verify/ docs/ Makefile README.md HANDOFF.md
+backend/ frontend/ k8s/ (k8s/images.txt 포함) dashboards/ docs/ (docs/HANDOFF.md 포함) Makefile README.md CLAUDE.md
+scripts/: setup/ build/ lib/ images/ wait/ tools/ verify/
 
 ## 작업 방식
 
 - 피처 1개 = 브랜치 feat/mX-NN-<이름> 1개 = draft PR 1개. main 직접 커밋 금지
 - plan mode로 계획만 제시 → 승인 후 구현
-- 실패하는 검증 (scripts/verify/<피처>.sh 또는 테스트)을 먼저 커밋 → 구현
+- 실패하는 검증 (scripts/verify/<ID-피처이름>.sh 또는 테스트)을 먼저 커밋 → 구현
 - 완료 시 검증표 (주장 / 확인 방법 / 결과). 실제로 실행한 명령과 출력만 "확인됨"
-- HANDOFF.md 맨 위에 피처 블록 추가: 한 일 / 된 것 / 안 된 것 / 다음 단계
+- docs/HANDOFF.md 맨 위에 피처 블록 추가: 한 일 / 된 것 / 안 된 것 / 다음 단계
 - 커밋 후 git push는 실행. gh pr create --draft는 명령만 출력하고 멈춘다
 - 개발 호스트는 macOS, 실행 대상은 Debian 13 VM (ssh lgtm-vm). VM 검증: rsync -a --delete --exclude .git ./ lgtm-vm:~/lgtm/ 후 ssh 실행. macOS 실행 결과는 검증으로 치지 않는다
 - 버전·기본값·API는 WebFetch나 실제 명령 출력으로 확인한 값만 쓴다
