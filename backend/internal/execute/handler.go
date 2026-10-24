@@ -56,6 +56,9 @@ const (
 // 테스트가 짧게 바꿔 timeout 경로를 빠르게 확인할 수 있도록 var로 둔다 (운영 코드는 바꾸지 않는다).
 var ipfsUploadTimeout = 10 * time.Second
 
+// ipfsGatewayURL은 응답 ipfs_url의 앞부분이다. Ingress로 노출한 Kubo gateway host다 (F-M3-03).
+const ipfsGatewayURL = "http://ipfs.lgtm.local/ipfs/"
+
 // InitMetrics는 lgtm_executions의 모든 status series와 lgtm_queue_rejected를 0으로 시작시킨다 (운영 기동 시 1회).
 func InitMetrics(m *telemetry.Metrics) {
 	m.InitSeries("rust", []string{statusSuccess, statusCompileError, statusInternalError,
@@ -220,7 +223,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if uErr == nil {
-		url := "http://ipfs.lgtm.local/ipfs/" + cid + "/"
+		url := ipfsGatewayURL + cid + "/"
 		resp.CID, resp.IPFSURL = &cid, &url
 		root.SetAttributes(attribute.String("ipfs.cid", cid))
 	}
