@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -198,7 +197,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp.Status = statusInternalError
 			resp.Message = "internal error: " + cErr.Error()
 		}
-		cls, _ := h.failClass(cErr, "compile")
+		cls, _ := failClass(cErr, "compile")
 		telemetry.FailSpan(root, cls)
 	} else {
 		exitCode = h.execute(ctx, root, wasm, &resp)
@@ -246,7 +245,7 @@ func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, fn
 	start := time.Now()
 	err := fn(ctx, span)
 	if err != nil {
-		cls, userDerived := h.failClass(err, name)
+		cls, userDerived := failClass(err, name)
 		telemetry.FailSpan(span, cls)
 		if userDerived {
 			h.log.ErrorContext(ctx, name+" failed", "class", cls)
@@ -259,40 +258,6 @@ func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, fn
 	// stage span의 ctx로 기록한다 (span.End()는 defer라 이 뒤). span 이름 ipfs.upload → stage label ipfs_upload.
 	h.metrics.RecordStage(ctx, strings.ReplaceAll(name, ".", "_"), elapsed)
 	return elapsed.Milliseconds(), err
-}
-
-// failClass는 err의 분류형 문구를 돌려준다. 분류가 없는 오류는 플랫폼 오류로 보고 "internal error [단계]"다.
-// userDerived가 true면 err 문자열에 사용자 입력이 들어 있을 수 있으므로 로그에 쓰면 안 된다.
-func (h *handler) failClass(err error, stage string) (cls string, userDerived bool) {
-	var ue *userError
-	var ef *execFailure
-	userDerived = errors.As(err, &ue) || errors.As(err, &ef)
-	if c, ok := telemetry.ClassOf(err); ok && c != "" {
-		return c, userDerived
-	}
-	return "internal error [" + stage + "]", userDerived
-}
-
-// uploadError는 ipfs.upload 실패다. 분류는 timeout/connect/http_4xx/http_5xx/other 중 하나다.
-// 내용(Kubo 응답 본문 등)은 사용자 입력이 아니지만 span에는 분류만 둔다.
-type uploadError struct{ err error }
-
-func (e *uploadError) Error() string { return "ipfs upload: " + e.err.Error() }
-func (e *uploadError) Unwrap() error { return e.err }
-func (e *uploadError) SpanMessage() string {
-	var se *ipfs.StatusError
-	var ne net.Error
-	switch {
-	case errors.Is(e.err, context.DeadlineExceeded):
-		return "ipfs upload failed [timeout]"
-	case errors.As(e.err, &se) && se.Code >= 500:
-		return "ipfs upload failed [http_5xx]"
-	case errors.As(e.err, &se):
-		return "ipfs upload failed [http_4xx]"
-	case errors.As(e.err, &ne):
-		return "ipfs upload failed [connect]"
-	}
-	return "ipfs upload failed [other]"
 }
 
 func (h *handler) invalid(ctx context.Context, w http.ResponseWriter, msg string) {
@@ -332,13 +297,6 @@ func (h *handler) queueRejected(ctx context.Context, w http.ResponseWriter, root
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "queue_full", "message": "서버가 바쁩니다. 잠시 후 다시 시도하세요", "trace_id": root.SpanContext().TraceID().String()})
 }
 
-// execFailure는 사용자 코드의 실행 실패(runtime_error/timeout/memory_limit)다. execute span을 ERROR로 만들기 위해
-// step의 error로 돌려주지만, 플랫폼 오류(internal_error)와 구분한다.
-type execFailure struct{ msg, class string }
-
-func (e *execFailure) Error() string       { return e.msg }
-func (e *execFailure) SpanMessage() string { return e.class }
-
 // execute는 execute 단계를 실행해 resp를 채우고 종료 코드(실행 결과가 없으면 nil)를 돌려준다. TR-04 attribute(exec.*)는 성공/실패 모두 execute span에 남긴다.
 // 실패(success가 아닌 모든 status)면 execute span과 root span을 ERROR로 표시한다.
 func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, resp *response) *int {
@@ -374,7 +332,7 @@ func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, res
 		}
 	}
 	if eErr != nil {
-		cls, _ := h.failClass(eErr, "execute")
+		cls, _ := failClass(eErr, "execute")
 		telemetry.FailSpan(root, cls)
 	}
 	if runErr != nil {
