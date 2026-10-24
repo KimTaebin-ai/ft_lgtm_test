@@ -10,6 +10,43 @@
 ### 다음 단계
 -->
 
+## F-M6-06 backend-refactor (브랜치 feat/m6-06-backend-refactor)
+
+backend/ Go 코드 구조만 바꿨다. 응답, span, metric, 로그 문구와 속성 키, 큐 슬롯 반환 시점은 그대로다. 테스트 파일은 고치지 않았다.
+
+### 무엇을 어디로 옮겼나
+| 무엇 | 전 | 후 |
+|---|---|---|
+| `"http://ipfs.lgtm.local/ipfs/"` 리터럴 | handler.go ServeHTTP 본문 | `execute.ipfsGatewayURL` 상수 (handler.go). upload_test.go:149의 리터럴은 단언이라 그대로 |
+| `userError` | execute/compiler_client.go | execute/errors.go |
+| `uploadError`, `execFailure` | execute/handler.go | execute/errors.go |
+| `failClass` | `(*handler).failClass` (handler.go) | 패키지 함수 `failClass` (errors.go). handler 필드를 쓰지 않아서 |
+| SpanMessage 규칙 | 주석으로만 있었음 | errors.go 상단 주석 + `var _ telemetry.Classified = (*userError)(nil)` 등 세 타입의 컴파일 타임 단언. execute에 인터페이스를 새로 선언하지 않고 기존 `telemetry.Classified`를 기준으로 삼음(계획 승인됨) |
+| `classRe`, `classFromHeader` | compiler_client.go | 그대로 (compiler 응답 파싱이라서) |
+| ServeHTTP 본문 (110줄) | handler.go | `readRequest` / `acquireSlot` / `compile` / (기존) `execute` / `upload` / `writeResult`로 나눔. ServeHTTP는 25줄 |
+| env 기본값 읽기 (`os.Getenv` + 빈 값 체크) | cmd/api 3곳, cmd/compiler 2곳 | `httpserver.Getenv(key, def)` (backend/internal/httpserver) |
+| 서버 시작 + signal 대기 + Shutdown + ErrServerClosed 처리 + listening/shutdown/stopped 로그 | cmd/api, cmd/compiler 각각 | `httpserver.Run(ctx, log, name, addr, handler, shutdownTimeout, listenAttrs...)`. 상한은 api 60s(상수 `shutdownTimeout`, 근거 주석은 cmd/api에 둠), compiler 20s. 순서는 Shutdown → "<name> stopped" 로그 → 호출자의 `tel.Shutdown()` flush로 같음 |
+| compiler `cleanWorkDir` 호출 시점 | 시작 시 1회 (telemetry.Setup 뒤, NewRunner·서버 시작 전). Shutdown 뒤 정리는 없음 | 같은 위치 (httpserver.Run 전) |
+
+### 된 것
+- VM docker(`golang:1.27.3-trixie`)에서 `gofmt -l` / `go vet ./...` / `go test -count=1 ./...`를 돌렸다. 기준선과 커밋 4개 각각에서 모두 통과했다.
+- `git diff origin/main -- '*_test.go'` 결과 0줄 (단언 변경 0건).
+- `make build deploy`를 돌린 뒤 m1-03, m1-04, m2-01, m2-03, m2-04, m3-02, m5-01, m6-04 verify가 전부 ALL PASS.
+
+### 안 된 것
+- `make clean && make`와 전체 verify는 돌리지 않았다 (지시에 따름: backend 코드만 바뀌었고 Makefile/k8s 변경이 없음. 전체는 F-M6-02 새 VM에서 돌린다).
+- httpserver 패키지에는 단위 테스트를 추가하지 않았다. 기동과 shutdown은 m1-03, m2-01, m6-04가 확인한다.
+
+### 추가 제안 (이번 범위 밖, 하지 않음)
+- `/healthz` 핸들러가 cmd 2곳에 중복 → `httpserver.Healthz`
+- 400/413/429 JSON 응답 쓰기(Content-Type + WriteHeader + Encode)가 중복 → writeJSON helper
+- `otelhttp.NewHandler(... WithSpanNameFormatter ...)` 패턴이 execute.NewHandler와 cmd/compiler에 중복
+- `"rust"` 리터럴이 handler, files, InitMetrics에 흩어져 있음 → 상수
+- compiler_client.go의 internal_error 문구가 한국어이고 응답 message에 그대로 노출됨 (바꾸면 동작이 달라지므로 별도 피처)
+
+### 다음 단계
+- PR 리뷰 후 merge. 전체 verify는 F-M6-02에서.
+
 ## F-M6-05 repo-layout (브랜치 feat/m6-05-repo-layout)
 
 F-M6-05에서 경로가 바뀌었다. **아래 과거 블록 본문의 경로는 고치지 않았다.** 옛 경로는 이 대응표로 읽는다.
