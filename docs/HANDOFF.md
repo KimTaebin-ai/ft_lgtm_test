@@ -42,6 +42,8 @@
 
 ### 안 된 것 (사용자가 새 VM에서 실행 → 결과 대기)
 - 빈 VM에서 625359a로 첫 make는 미확인(최종 리허설에서 확인 예정)
+- inbrowser.link 링크로 CID가 실제로 열리는지 확인하지 않음 (캠퍼스 NAT 환경이라 열리지 않는 것이 예상 동작)
+- k3d 노드 컨테이너 restart policy의 실제 값은 기록하지 않음 (m6-02 검사 9는 always 또는 unless-stopped인지만 확인)
 
 ### 다음 단계
 - 사용자 결과로 README의 소요 시간과 재부팅 결과 `TBD`를 채우고, Known limitations의 "Full `make verify` on a fresh VM" 줄을 갱신한다.
