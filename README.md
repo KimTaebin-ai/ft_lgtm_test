@@ -293,18 +293,18 @@ Iterating after a code change: `make build deploy` is enough; `make re` is only 
 
 ### Use of AI
 
-AI was used throughout this project, mainly for implementation. The design, the rules the implementation had to follow, and every approval were the author's. Commit trailers (`Co-Authored-By`) and `docs/HANDOFF.md` are the record of who did what.
+The author designed the project skeleton and its core logic before any code was written: the directory layout, the service boundaries (backend, isolated compiler, IPFS node, observability stack), the API and its status model, the request pipeline (queue → compile → execute → IPFS upload), the sandbox and resource limits, and the span and metric structure. All of this is written down in the PRD. AI (Claude Code) then wrote the code from that design, under rules the author set, and every plan and result went through the author's review before it was merged. Commit trailers (`Co-Authored-By`) and `docs/HANDOFF.md` record who did what.
 
 **Design and decisions (author)**
-- **Architecture and stack**, written down in the PRD before any code: Rust compiled to WASM and run under WASI with wasmtime-go, compilation moved to a separate isolated pod, k3d, the LGTM stack behind a single OpenTelemetry Collector, raw manifests instead of Helm.
+- **Stack**: Rust compiled to WASM and run under WASI with wasmtime-go, k3d, the LGTM stack behind a single OpenTelemetry Collector, raw manifests instead of Helm.
 - **Security model**: the execution limits (10 MB memory, 5 s, 10 kB output, 64 KB request body, 2 running + 8 queued), the two-layer defense for the compile step (a source deny-list, with pod isolation as the final layer), the NetworkPolicy scope, and the rule that no user input appears in traces or logs.
-- **How the work was delivered**: the project was split into 24 features across milestones M0–M6. Each feature had a written scope, an out-of-scope list, and acceptance criteria that could be checked by running a command.
+- **How the work was delivered**: the project was split into features across milestones M0–M6. Each feature had a written scope, an out-of-scope list, and acceptance criteria that could be checked by running a command.
 - **Engineering rules**, kept in `CLAUDE.md`: a failing verify script is committed before the implementation; only commands actually run on the VM count as verified; one VM lock across parallel sessions; every make target idempotent; no manual configuration (Grafana only through provisioning files); any deviation from the PRD is stopped and asked as an explicit "PRD change".
 - **Review**: every implementation plan was approved or sent back before coding started, and every result was reviewed before merging.
-- **Hands-on checks**: the manual scenarios in the VM's Firefox (limit cases in the playground, and metric → exemplar → trace → logs → IPFS), the IPFS reachability test on a campus network with UTM Bridged networking, and the question to the subject authors about the public gateway requirement.
+- **Hands-on checks**: the manual scenarios in the VM's Firefox (limit cases in the playground, and metric → exemplar → trace → logs → IPFS), the IPFS reachability test on a campus network with UTM Bridged networking, the fresh-VM run on a separate VirtualBox (amd64) machine, and the question to the subject authors about the public gateway requirement.
 
 **Implementation (Claude Code)**
-- Wrote the code, Kubernetes manifests, Makefile, scripts and verify scripts from the specifications above, ran them on the VM, and reported each result as claim / how it was checked / result. Counted with `git log` on `origin/main` at commit `4d34bde`, 89 of 93 non-merge commits carry the trailer `Co-Authored-By: Claude Sonnet 5.5` (the other 4 are the first commit and three `CLAUDE.md` rule updates).
+- Wrote the code, Kubernetes manifests, Makefile, scripts and verify scripts from the design above, ran them on the VM, and reported each result as claim / how it was checked / result. Counted with `git log` on `origin/main` at commit `4d34bde`, 89 of 93 non-merge commits carry the trailer `Co-Authored-By: Claude Sonnet 5.5` (the other 4 are the first commit and three `CLAUDE.md` rule updates).
 
 **Review partner (Claude, chat)**
 - Used to draft and challenge the PRD, the per-feature prompts, and the plan and result reviews, and to compare technical options. Final decisions and approvals were made by the author.
