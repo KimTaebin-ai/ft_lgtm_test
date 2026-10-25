@@ -1,4 +1,4 @@
-# F-M1-02 OTel Collector (contrib). OTLP 수신 → Tempo(traces) / Mimir(metrics) / Loki(logs). 클러스터 내부 Service 만, Ingress 없음.
+# OTel Collector (contrib). OTLP 수신 → Tempo(traces) / Mimir(metrics) / Loki(logs). 클러스터 내부 Service 만, Ingress 없음.
 # exporter 이름은 0.163.1 `otelcol-contrib components` 출력으로 확인 (otlp_grpc, otlp_http, prometheus_remote_write).
 # prometheus_remote_write 는 delta monotonic sum / histogram 을 버린다 → 앱 metric 은 cumulative 로 낼 것.
 # 근거: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/v0.163.0/exporter/prometheusremotewriteexporter/README.md

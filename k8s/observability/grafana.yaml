@@ -1,5 +1,5 @@
-# F-M1-02 Grafana. 상태는 전부 provisioning 이 소유한다 (PVC 없음, 재시작해도 동일).
-# 접근: anonymous Editor. Viewer 는 Explore 접근이 막혀 trace-to-logs 가 깨질 수 있다 (PRD 14장 해소).
+# Grafana. 상태는 전부 provisioning 이 소유한다 (PVC 없음, 재시작해도 동일).
+# 접근: anonymous Editor. Viewer 는 Explore 접근이 막혀 trace-to-logs 가 깨질 수 있다.
 # admin 비밀번호는 make deploy 가 만든 Secret grafana-admin 에서 주입한다 (기본값 admin/admin 금지).
 # 외부 통신 차단 키는 grafana 13.2.4 defaults.ini 로 확인. `$$` 는 provisioning 의 `$` 이스케이프.
 # 근거: https://grafana.com/docs/grafana/v13.2/datasources/tempo/configure-tempo-data-source/provision/

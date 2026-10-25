@@ -1,4 +1,4 @@
-# F-M1-01 Mimir. monolithic(-target=all), classic 아키텍처(ingest storage/Kafka 없음), filesystem.
+# Mimir. monolithic(-target=all), classic 아키텍처(ingest storage/Kafka 없음), filesystem.
 # 근거: https://grafana.com/docs/mimir/v3.2.x/references/architecture/deployment-modes/
 #       https://grafana.com/docs/mimir/v3.2.x/configure/configuration-parameters/
 apiVersion: v1

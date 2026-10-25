@@ -4,7 +4,7 @@
   "tags": [
     "lgtm"
   ],
-  "description": "PRD 8.6 Dashboard 2 (Traces). provisioning 파일: 수정은 이 파일에서 하고 make deploy 로 반영한다.",
+  "description": "Dashboard 2 (Traces). provisioning 파일: 수정은 이 파일에서 하고 make deploy 로 반영한다.",
   "editable": false,
   "graphTooltip": 1,
   "schemaVersion": 41,

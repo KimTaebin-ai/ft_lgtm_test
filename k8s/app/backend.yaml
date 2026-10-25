@@ -1,4 +1,4 @@
-# F-M1-03 backend. image 는 make deploy 가 __BACKEND_IMAGE__ 를 소스 hash 태그로 치환한다.
+# backend. image 는 make deploy 가 __BACKEND_IMAGE__ 를 소스 hash 태그로 치환한다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +14,7 @@ spec:
       labels: {app: backend}
     spec:
       automountServiceAccountToken: false
-      # F-M6-04: 종료 시 preStop 10s (Traefik 이 endpoint 제거를 반영할 시간) + Shutdown 상한 60s (cmd/api/main.go) + 여유 = 75s.
+      # 종료 시 preStop 10s (Traefik 이 endpoint 제거를 반영할 시간) + Shutdown 상한 60s (cmd/api/main.go) + 여유 = 75s.
       terminationGracePeriodSeconds: 75
       securityContext:
         runAsNonRoot: true
@@ -35,7 +35,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           lifecycle:
-            # F-M6-04: SIGTERM 전에 10초 더 요청을 받는다. rollout 직후 Traefik 이 이미 사라진 pod IP 로 보내 30초 뒤 504 가 났다 (m6-04 타임라인).
+            # SIGTERM 전에 10초 더 요청을 받는다. Traefik 이 endpoint 제거를 반영하기 전에 사라진 pod IP 로 보내면 30초 뒤 504 가 난다.
             preStop: {sleep: {seconds: 10}}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
@@ -45,10 +45,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
-            # F-M2-03 실측 (동시 N건이 각각 9MB 를 쥐고 5초 spin, cgroup memory.peak): N=1 27MB / N=4 70MB / N=8 122MB / N=16 232MB.
-            # F-M2-04: 처리 2 + 대기 8 로 묶인 뒤 동시 20건 실측 (VM arm64) idle 11MB, memory.current 43~63MB, memory.peak 70MB.
-            #   limit 은 512Mi 유지: 최악 조합(처리 2건이 모두 10MiB 한도 + 큰 wasm compile 응답이 겹침)은 실측하지 않았고,
-            #   OOMKill 이면 큐에 있던 요청 10건이 모두 사라진다. request 64Mi = idle + 처리 2건분 (peak 근처).
+            # 처리 2 + 대기 8 에서 동시 20건 peak 약 70MB. limit 512Mi 는 최악 조합(처리 2건 모두 10MiB + 큰 wasm 응답) 여유다.
+            # OOMKill 이면 큐의 요청 10건이 모두 사라진다. request 64Mi = idle + 처리 2건분.
             requests: {cpu: 100m, memory: 64Mi}
             limits: {cpu: 1, memory: 512Mi}
 ---
