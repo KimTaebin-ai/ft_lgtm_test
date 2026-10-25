@@ -39,6 +39,10 @@ LGTM is a Rust playground that you can fully observe. In the browser you write a
 
 ### Install and run
 
+Requirements: a user that can run `sudo`, and Internet access for the first `make` (apt packages, the Docker/kubectl/Helm/k3d binaries, container images and the Rust/Go/Node base images are downloaded).
+
+> **sudo on a fresh Debian:** if you set a root password during installation, the first user is *not* in the `sudo` group (and `sudo` may not be installed). Either leave the root password empty when installing Debian, or run `su -c 'apt install -y sudo && usermod -aG sudo <user>'` and log in again.
+
 Inside the VM:
 
 ```bash
@@ -47,7 +51,13 @@ git clone <this repository> lgtm && cd lgtm
 make
 ```
 
-`make` runs `install`, `cluster`, `build`, `deploy` and `hosts` in order. It installs Docker, kubectl, Helm and k3d at pinned versions, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), deploys observability → IPFS → app, and writes the host names to the VM's `/etc/hosts`. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe.
+`make` asks for the sudo password **once, right at the start**, and then runs `install`, `hosts`, `cluster`, `build` and `deploy` in that order. All sudo use (apt, Docker, the binaries in `/usr/local/bin`, `/etc/hosts`) happens in `install` and `hosts`, well inside sudo's 15-minute timestamp, so it does not ask again later. It installs Docker, kubectl, Helm, k3d and the Korean font `fonts-noto-cjk` at pinned versions, writes the host names to the VM's `/etc/hosts`, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), and deploys observability → IPFS → app. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe (if the sudo timestamp has expired it asks for the password once more). The run ends with `ingress ready: lgtm.local`.
+
+Expected duration on a fresh VM: TBD (to be measured on a fresh VM).
+
+Start over: `make fclean` removes the cluster, the locally built images and the `/etc/hosts` block; `make re` does `fclean` and then `make`.
+
+After a VM reboot: `make install` enables Docker at boot, and `scripts/verify/m6-02-fresh-vm.sh` checks the restart policy of the k3d node containers. Log in after the reboot and run `scripts/tools/reboot-check.sh`; it passes when all pods are Running and `lgtm.local` answers 200 within 3 minutes of boot (fresh-VM result: TBD).
 
 ### Addresses (open them in Firefox **inside the VM**)
 
@@ -222,6 +232,10 @@ Bridged removes the UTM layer, but the router would still have to forward 4001 (
 - `trustless-gateway.link`, `4everland.io`: gateway-side errors (522 / 504).
 - The external reachability probe backend could not be reached from the VM (timeout), so that step is reported as `SKIP`.
 
+Subject authors confirmed (world_beta, 2026-10-23) that explaining a campus network limitation is acceptable, and that a service worker gateway such as inbrowser.link or any public gateway may be used instead of ipfs.io.
+
+The playground's public link therefore points to `https://inbrowser.link/ipfs/<cid>` instead of `ipfs.io` (whether it opens there was **not measured** here; it still depends on our node being reachable).
+
 To show a working public fetch in a defence you need a network where the router can forward 4001 (or another network where inbound connections work). Otherwise present the `make ipfs-check` output and explain the layer that blocks.
 
 ## Demo walkthrough
@@ -238,8 +252,8 @@ To show a working public fetch in a defence you need a network where the router 
 
 | Command | What it does |
 |---|---|
-| `make` | `install` + `cluster` + `build` + `deploy` + `hosts` |
-| `make install` | Install Docker, kubectl, Helm, k3d (pinned, idempotent, arch-aware) |
+| `make` | `sudo-auth` (asks the sudo password once) + `install` + `hosts` + `cluster` + `build` + `deploy` |
+| `make install` | Install Docker, kubectl, Helm, k3d (pinned, idempotent, arch-aware) and `fonts-noto-cjk` |
 | `make cluster` | Prefetch k3s/k3d images, create the k3d cluster (80/443 and 4001 tcp/udp mapped) |
 | `make images` | Prefetch all external images and import the workload images into k3d |
 | `make build` | Build backend, compiler and frontend images locally (the frontend build runs lint and tests) and import them into k3d |
@@ -249,9 +263,11 @@ To show a working public fetch in a defence you need a network where the router 
 | `make verify` | Run all `scripts/verify/*` checks in order, stopping at the first failure (VM/Linux only; takes several minutes) |
 | `make verify-m1` | Only the first-milestone checks |
 | `make ipfs-check` | IPFS and NAT diagnosis, see [IPFS and NAT](#ipfs-and-nat) (not part of `make`) |
-| `make clean` | Delete the k3d cluster (leaves `/etc/hosts` alone) |
+| `make clean` | Delete the k3d cluster (leaves `/etc/hosts` and images alone) |
+| `make fclean` | `clean` + remove the locally built `lgtm-backend` / `lgtm-compiler` / `lgtm-frontend` images + remove the `/etc/hosts` block (external images, apt packages and binaries stay) |
+| `make re` | `fclean`, then `make` |
 
-Iterating after a code change: `make build deploy` is enough; `make clean && make` is only for a from-scratch check.
+Iterating after a code change: `make build deploy` is enough; `make re` is only for a from-scratch check.
 
 **Rolling restarts.** Right after a rollout, requests used to hang for exactly 30 s and end in a `504`: Traefik was slow to drop the old pod's endpoint, so it kept sending requests to a terminating pod whose SYN packets were discarded. The backend and frontend pods now have a 10 s `preStop` sleep (and the backend a longer termination grace period and shutdown limit), so the old pod keeps serving until Traefik has caught up. `scripts/verify/m6-04-stability.sh` restarts each deployment while sending requests and requires zero non-200 responses; it passed twice after the fix. The upper bound of Traefik's delay was not measured (10 s is a margin), and replicas above 1 or a heavily loaded node were not tested.
 
@@ -278,17 +294,18 @@ Iterating after a code change: `make build deploy` is enough; `make clean && mak
 
 ### Use of AI
 
-Facts below come from the git history, `docs/HANDOFF.md` and `CLAUDE.md`, except the items marked as provided by the author.
+AI was used throughout this project, mainly for implementation. The design, the rules the implementation had to follow, and every approval were the author's. Commit trailers (`Co-Authored-By`) and `docs/HANDOFF.md` are the record of who did what.
 
-**Claude Code (CLI), model Claude Sonnet 5.5 — used for implementation work, one feature per branch.**
+**Design and decisions (author)**
+- **Architecture and stack**, written down in the PRD before any code: Rust compiled to WASM and run under WASI with wasmtime-go, compilation moved to a separate isolated pod, k3d, the LGTM stack behind a single OpenTelemetry Collector, raw manifests instead of Helm.
+- **Security model**: the execution limits (10 MB memory, 5 s, 10 kB output, 64 KB request body, 2 running + 8 queued), the two-layer defense for the compile step (a source deny-list, with pod isolation as the final layer), the NetworkPolicy scope, and the rule that no user input appears in traces or logs.
+- **How the work was delivered**: the project was split into 24 features across milestones M0–M6. Each feature had a written scope, an out-of-scope list, and acceptance criteria that could be checked by running a command.
+- **Engineering rules**, kept in `CLAUDE.md`: a failing verify script is committed before the implementation; only commands actually run on the VM count as verified; one VM lock across parallel sessions; every make target idempotent; no manual configuration (Grafana only through provisioning files); any deviation from the PRD is stopped and asked as an explicit "PRD change".
+- **Review**: every implementation plan was approved or sent back before coding started, and every result was reviewed before merging.
+- **Hands-on checks**: the manual scenarios in the VM's Firefox (limit cases in the playground, and metric → exemplar → trace → logs → IPFS), the IPFS reachability test on a campus network with UTM Bridged networking, and the question to the subject authors about the public gateway requirement.
 
-- Counted with `git log` on `origin/main` at commit `4d34bde`: 93 non-merge commits, 89 of them carry the trailer `Co-Authored-By: Claude Sonnet 5.5`; the other 4 are `d86043d` (first commit) and three `CLAUDE.md` rule updates (`53f6530`, `c99fa3a`, `5fb2d0c`). There are also 21 merge commits. The trailer is not disabled, so `git log` shows which commits were AI co-authored.
-- *Code:* backend (API, queue and limits, Wasmtime execution, compiler service, deny-list, IPFS upload, OpenTelemetry instrumentation), frontend (Monaco shell, result display), Kubernetes manifests, Dockerfiles, `Makefile` and helper scripts, Grafana dashboards.
-- *Verification scripts:* the `scripts/verify/*.sh` checks, each committed in a failing state before the implementation, plus unit tests.
-- *Research:* looking up current versions, defaults and APIs from official documentation and real command output (for example the Tempo 3 TraceQL metrics behaviour, wasmtime-go's stdout API, UTM port-forwarding documentation) and recording the findings in `docs/HANDOFF.md`.
-- *Documentation:* `docs/HANDOFF.md` feature blocks with verification tables, and this README.
-- *Working rules* (`CLAUDE.md`): plan first and implement after approval; a failing check first; only commands that were actually run and their output count as "verified"; no results from the macOS development host count as verification, only the Debian VM.
+**Implementation (Claude Code)**
+- Wrote the code, Kubernetes manifests, Makefile, scripts and verify scripts from the specifications above, ran them on the VM, and reported each result as claim / how it was checked / result. Counted with `git log` on `origin/main` at commit `4d34bde`, 89 of 93 non-merge commits carry the trailer `Co-Authored-By: Claude Sonnet 5.5` (the other 4 are the first commit and three `CLAUDE.md` rule updates).
 
-**Claude (claude.ai, chat) — used as a technical reviewer and decision partner**: drafting the PRD, writing a kickoff prompt for each feature, reviewing Claude Code's plans and results before approval or merge, and comparing technical options. All technical decisions and approvals were made by the author. *(Provided by the author; not verifiable from git.)*
-
-**What the author did** *(provided by the author; only the manual checks recorded in `docs/HANDOFF.md` can be traced in the repository)*. The author made all technical decisions and approvals: the stack (Rust compiled to WASM, Go + wasmtime-go, k3d, LGTM stack with an OpenTelemetry Collector), the security limits and the compiler isolation model, and every scope change recorded as "PRD change" in `docs/HANDOFF.md`. The author approved or rejected each Claude Code plan before implementation, reviewed every result before merging, and decided the merge order between parallel features. The author ran the manual checks in the VM's Firefox (failure and limit scenarios in the playground, and the metric → exemplar → trace → logs → IPFS walkthrough), ran the IPFS reachability test on a campus network with UTM Bridged networking, and contacted the subject authors about the public gateway requirement.
+**Review partner (Claude, chat)**
+- Used to draft and challenge the PRD, the per-feature prompts, and the plan and result reviews, and to compare technical options. Final decisions and approvals were made by the author.

@@ -28,10 +28,12 @@ check_ver docker-ce-cli "$dv" "$(dpkg-query -W -f='${Version}' docker-ce-cli 2>/
 installed() { [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]; }
 installed docker-buildx-plugin && pass "docker-buildx-plugin 설치됨" || fail "docker-buildx-plugin 없음"
 installed docker-compose-plugin && fail "docker-compose-plugin 이 설치되어 있음" || pass "docker-compose-plugin 없음"
+installed fonts-noto-cjk && pass "fonts-noto-cjk 설치됨" || fail "fonts-noto-cjk 없음"
 echo "INFO: k3d 기본 k3s / 고정 K3S_IMAGE: $(k3d version 2>/dev/null | sed -n 's/^k3s version //p') / $(var K3S_IMAGE)"
 
 # 2. docker daemon + 래퍼
 systemctl is-active --quiet docker && pass "docker daemon active" || fail "docker daemon not active"
+systemctl is-enabled --quiet docker && pass "docker 부팅 시 시작 (enabled)" || fail "docker 가 enabled 아님"
 scripts/lib/with-docker.sh docker info >/dev/null 2>&1 && pass "래퍼 경유 docker info" || fail "래퍼 경유 docker info 실패"
 
 # 3. sg 경로 quoting
@@ -44,7 +46,8 @@ done
 out="$(make install 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && pass "make install exit 0" || fail "make install exit $rc"
 n="$(printf '%s\n' "$out" | grep -c '^\[skip\] ')"
-[ "$n" -eq 4 ] && pass "[skip] 4줄" || fail "[skip] 줄 수 $n (기대 4)"
+# docker, fonts-noto-cjk, kubectl, helm, k3d
+[ "$n" -eq 5 ] && pass "[skip] 5줄" || fail "[skip] 줄 수 $n (기대 5)"
 if printf '%s\n' "$out" | grep -Eiq 'apt|curl|wget|download|Get:|Setting up|Unpacking'; then
 	fail "재실행 출력에 다운로드/apt 흔적"
 else pass "다운로드/apt 흔적 없음"; fi

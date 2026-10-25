@@ -24,10 +24,22 @@ export CLUSTER_NAME K3D_VERSION K3S_IMAGE KUBECTL_VERSION HELM_VERSION DOCKER_VE
 WITH_DOCKER := scripts/lib/with-docker.sh
 
 .DEFAULT_GOAL := all
-.PHONY: all install cluster images build deploy hosts status verify verify-m1 ipfs-check clean fclean re
+.PHONY: all sudo-auth install cluster images build deploy hosts status verify verify-m1 ipfs-check clean fclean re
 
-all: install cluster build deploy hosts
+# 순서는 prerequisite 나열 순서에 의존한다 (-j 미지원). sudo 를 쓰는 install·hosts 를 앞에 모아
+# 비밀번호는 시작 직후 한 번만 묻고, 마지막 sudo 도 sudo 타임스탬프(기본 15분) 안에 끝나게 한다.
+# hosts 는 클러스터와 무관하다 (wait-ingress 는 --resolve 를 쓴다).
+all: sudo-auth install hosts cluster build deploy
 
+# root 이거나 sudo 가 비밀번호 없이 되면(NOPASSWD, 타임스탬프 유효) 아무것도 하지 않는다
+sudo-auth:
+	@if [ "$$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; then :; \
+	elif ! command -v sudo >/dev/null 2>&1; then \
+		echo "ERROR: sudo 가 없습니다. README Instructions 의 sudo 준비를 보세요" >&2; exit 1; \
+	else echo "sudo 비밀번호를 한 번 입력하세요 (이후 make 는 다시 묻지 않습니다)"; sudo -v; fi
+
+# 단독 실행은 sudo-auth 를 거치지 않는다: 이미 설치된 상태(verify 의 재실행)에서는 sudo 를 부르지 않으므로
+# 긴 make verify 도중 비밀번호를 묻지 않게 한다. 설치가 필요하면 install.sh 의 sudo 가 직접 묻는다.
 install:
 	@bash scripts/setup/install.sh
 
@@ -94,10 +106,10 @@ status:
 
 # 전체 검증: 순차 실행, 첫 실패에서 중단. verify 스크립트는 서로를 호출하지 않는다 (port-forward 충돌 방지). VM(Linux)에서만 동작한다
 VERIFY_M1 = m1-01-obs-backends m1-02-collector-grafana m1-03-backend-skeleton m1-04-metrics-exemplar
-VERIFY_ALL = $(VERIFY_M1) m2-01-compiler-service m2-02-compiler-hardening m2-03-wasmtime-exec m2-04-limits-queue \
+VERIFY_ALL = m0-01-skeleton-install m0-02-cluster-ingress-hosts $(VERIFY_M1) m2-01-compiler-service m2-02-compiler-hardening m2-03-wasmtime-exec m2-04-limits-queue \
 	m3-01-kubo-node m3-02-ipfs-upload m4-01-frontend-shell m4-02-result-display m6-03-image-prefetch \
 	m3-03-external-gateway m5-01-instrumentation m5-02-dashboard-metrics m5-03-dashboard-traces \
-	m6-04-stability m6-01-readme m6-05-repo-layout
+	m6-04-stability m6-01-readme m6-05-repo-layout m6-02-fresh-vm
 
 # $(call run_verify,<타겟 이름>,<스크립트 목록>)
 define run_verify
@@ -121,17 +133,23 @@ verify-m1:
 ipfs-check:
 	@bash scripts/tools/ipfs-check.sh
 
-# /etc/hosts 는 건드리지 않는다 (fclean은 F-M6-02)
+# 클러스터만 지운다. /etc/hosts 와 이미지는 건드리지 않는다
 clean:
 	@if $(WITH_DOCKER) k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
 		$(WITH_DOCKER) k3d cluster delete $(CLUSTER_NAME); \
 	else echo "[skip] cluster $(CLUSTER_NAME) 없음"; fi
 
-fclean:
-	@echo "TODO F-M6-02"
+# clean + 직접 빌드한 이미지(lgtm-backend/compiler/frontend) 삭제 + /etc/hosts 블록 제거.
+# 클러스터를 먼저 지워야 이미지를 rmi 할 수 있다. 외부 이미지, apt 패키지, 설치한 바이너리는 남긴다.
+fclean: sudo-auth clean
+	@imgs="$$($(WITH_DOCKER) docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^lgtm-(backend|compiler|frontend):' || true)"; \
+	if [ -n "$$imgs" ]; then $(WITH_DOCKER) docker rmi $$imgs; else echo "[skip] lgtm-* 이미지 없음"; fi
+	@bash scripts/setup/hosts.sh --remove
 
+# recipe 안에서 차례로 부르므로 -j 에서도 fclean 이 끝난 뒤 all 이 시작된다
 re:
-	@echo "TODO F-M6-02"
+	@$(MAKE) --no-print-directory fclean
+	@$(MAKE) --no-print-directory all
 
 # 변수 조회용 (scripts/verify 에서 사용): make -s print-K3D_VERSION
 print-%:

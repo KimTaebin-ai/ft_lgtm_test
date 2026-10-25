@@ -4,7 +4,8 @@ import type { ExecuteOutcome, ExecuteResponse } from './api'
 // CIDv0(base58, Qm…) / CIDv1(base32, bafy…) 가 만족하는 느슨한 형태. href 에 넣기 전 검증용
 const CID_RE = /^[A-Za-z0-9]{10,100}$/
 const LOCAL_IPFS = 'http://ipfs.lgtm.local/ipfs/'
-const PUBLIC_IPFS = 'https://ipfs.io/ipfs/'
+// ipfs.io 는 service worker gateway 로 옮겨 가는 중이라 inbrowser.link 를 쓴다 (출제자 확인, README IPFS and NAT)
+const PUBLIC_IPFS = 'https://inbrowser.link/ipfs/'
 
 export function ResultView({ outcome }: { outcome: ExecuteOutcome }) {
   switch (outcome.kind) {
@@ -119,7 +120,7 @@ function IpfsLinks({ data }: { data: ExecuteResponse }) {
       </a>
       {' · '}
       <a href={PUBLIC_IPFS + cid} target="_blank" rel="noopener noreferrer">
-        ipfs.io/ipfs/{cid}
+        inbrowser.link/ipfs/{cid}
       </a>
     </div>
   )

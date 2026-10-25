@@ -94,12 +94,12 @@ describe('timings', () => {
 })
 
 describe('IPFS 링크', () => {
-  it('로컬 + ipfs.io 링크 2개, 새 탭, cid 로 직접 조립', () => {
+  it('로컬 + inbrowser.link 링크 2개, 새 탭, cid 로 직접 조립', () => {
     render(<ResultView outcome={ok({})} />)
     const local = screen.getByRole('link', { name: /ipfs\.lgtm\.local/ })
-    const pub = screen.getByRole('link', { name: /ipfs\.io/ })
+    const pub = screen.getByRole('link', { name: /inbrowser\.link/ })
     expect(local).toHaveAttribute('href', `http://ipfs.lgtm.local/ipfs/${CID}`)
-    expect(pub).toHaveAttribute('href', `https://ipfs.io/ipfs/${CID}`)
+    expect(pub).toHaveAttribute('href', `https://inbrowser.link/ipfs/${CID}`)
     for (const a of [local, pub]) {
       expect(a).toHaveAttribute('target', '_blank')
       expect(a.getAttribute('rel')).toContain('noopener')
