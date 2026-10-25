@@ -1,6 +1,6 @@
-# LGTM Makefile (PRD 9.1). 미구현 타겟은 "TODO <피처ID>" 출력 후 exit 0.
+# LGTM Makefile.
 
-# ---- 고정 버전 (확인일 2026-10-21) ----
+# ---- 고정 버전 ----
 K3D_VERSION        := v5.9.0
 # k3d cluster create --image 로 사용 (scripts/setup/cluster.sh)
 K3S_IMAGE          := rancher/k3s:v1.37.1-k3s1
@@ -61,7 +61,7 @@ build:
 	@FRONTEND_IMAGE=$(FRONTEND_IMAGE) bash scripts/build/build-frontend.sh
 	@bash scripts/images/import-images.sh
 
-# observability → ipfs → app 순서 (PRD 9.1). 대기는 readinessProbe + rollout status
+# observability → ipfs → app 순서. 대기는 readinessProbe + rollout status
 # Secret grafana-admin 은 없을 때만 랜덤 생성한다 (재실행해도 불변, 값은 출력하지 않는다)
 # dashboards ConfigMap 은 dashboards/*.json 에서 만든다 (0개면 빈 ConfigMap)
 deploy:
@@ -129,7 +129,7 @@ verify:
 verify-m1:
 	$(call run_verify,verify-m1,$(VERIFY_M1))
 
-# 네트워크 상태에 의존하므로 make all 에 넣지 않는다 (scripts/tools/ipfs-check.sh, F-M3-03)
+# 네트워크 상태에 의존하므로 make all 에 넣지 않는다 (scripts/tools/ipfs-check.sh)
 ipfs-check:
 	@bash scripts/tools/ipfs-check.sh
 

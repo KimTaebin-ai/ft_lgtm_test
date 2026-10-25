@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# k3d 클러스터 생성 + Traefik 대기 (PRD INF-02, IP-05). idempotent.
+# k3d 클러스터 생성 + Traefik 대기. idempotent.
 # env: CLUSTER_NAME, K3S_IMAGE (Makefile이 export). docker/k3d 호출은 with-docker.sh 경유.
 set -euo pipefail
 

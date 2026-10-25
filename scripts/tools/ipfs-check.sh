@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M3-03 make ipfs-check: "우리 노드가 올린 CID 를 public gateway 에서 열 수 있나" 진단.
+# make ipfs-check: "우리 노드가 올린 CID 를 public gateway 에서 열 수 있나" 진단.
 # 네트워크 상태에 의존하므로 make all 에 넣지 않는다. public 쪽 실패는 결과일 뿐 exit 0 (kubo 를 못 쓰면 exit 1).
 # 출력 형식: [ipfs-check] S<n> PASS|FAIL|INFO|SKIP <내용> / GATEWAY / CID / SUMMARY (scripts/verify/m3-03-external-gateway.sh 가 검사)
 # 근거: Kubo RPC https://docs.ipfs.tech/reference/kubo/rpc/ (swarm/addrs/autonat, provide/once),
@@ -13,7 +13,7 @@ CLUSTER_NAME="${CLUSTER_NAME:-lgtm}"
 CTX="k3d-${CLUSTER_NAME}"
 NODE="k3d-${CLUSTER_NAME}-server-0"
 LOCAL_GW="ipfs.lgtm.local"
-# 확인한 것만 (2026-10-23 VM 에서 실제 요청). 응답이 오류여도 "gateway 가 응답했다"는 증거라 목록에 둔다
+# VM 에서 실제로 요청해 확인한 것만. 응답이 오류여도 "gateway 가 응답했다"는 증거라 목록에 둔다
 GATEWAYS=(ipfs.io dweb.link gateway.pinata.cloud trustless-gateway.link 4everland.io)
 GW_MAX_TIME="${IPFS_CHECK_GW_MAX_TIME:-90}"
 DELEGATED_WAIT="${IPFS_CHECK_DELEGATED_WAIT:-60}"

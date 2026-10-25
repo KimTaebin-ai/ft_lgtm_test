@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# k8s/images.txt 의 외부 이미지를 docker host 로 재시도하며 pull 한다 (INF-03/07). idempotent.
+# k8s/images.txt 의 외부 이미지를 docker host 로 재시도하며 pull 한다. idempotent.
 # usage: prefetch-images.sh [role...]   (role = workload|build|infra, 기본 전체)
 # env:   IMAGES_FILE(기본 k8s/images.txt), PREFETCH_RETRIES(5), PREFETCH_BACKOFF(첫 대기 초, 5; 매번 2배),
 #        PREFETCH_TIMEOUT(시도당 초, 300), PREFETCH_DOCKER(docker 명령, 기본 scripts/lib/with-docker.sh docker),

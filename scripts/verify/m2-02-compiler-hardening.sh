@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M2-02 compiler-hardening 검증. Debian VM(Linux)에서만 실행한다.
+# compiler-hardening 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 # 15초 timeout 재현은 m2-01.sh 와 같이 단위 테스트로 대체한다.
 set -u

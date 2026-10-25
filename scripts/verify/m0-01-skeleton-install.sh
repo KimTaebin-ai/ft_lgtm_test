@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M0-01 skeleton-install 검증. Debian VM(Linux)에서만 실행한다.
+# skeleton-install 검증. Debian VM(Linux)에서만 실행한다.
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then

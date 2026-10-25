@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M1-04 metrics-exemplar 검증. Debian VM(Linux)에서만 실행한다.
+# metrics-exemplar 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 # 이전 피처 회귀(m1-01 ~ m1-03)는 make verify-m1 이 순서대로 실행한다 (여기서는 호출하지 않는다).
 set -u
@@ -25,7 +25,7 @@ k() { kubectl --context "$CTX" "$@"; }
 P_MIMIR=22080
 P_TEMPO=17200
 
-# PRD 8.2 bucket 경계 (+Inf 포함)
+# histogram bucket 경계 (+Inf 포함, telemetry.DurationBuckets)
 WANT_LE='["+Inf", "0.05", "0.1", "0.25", "0.5", "1", "10", "2", "20", "3", "4", "4.5", "5", "5.5"]'
 
 LOAD_ERR="$(mktemp)"
@@ -107,7 +107,7 @@ for pair in "execution_duration:$DUR" "stage_duration:$STG"; do
 	[ "$v" = "$want" ] && pass "lgtm_${name}_seconds le 집합 == PRD bucket" || fail "lgtm_${name}_seconds le='${v}' (기대 ${want})"
 done
 
-# ---- 4b. label 세트 (PRD 8.2) ----
+# ---- 4b. label 세트 ----
 lab() { printf '%s' "$1" | pyj "sorted(set(k for s in d for k in s if k not in ('__name__','le','job','instance','service_name','service_instance_id','otel_scope_name','otel_scope_version','otel_scope_schema_url','exported_job','exported_instance')))"; }
 v="$(lab "$EXE")"; [ "$v" = "['language', 'status']" ] && pass "executions label: $v" || fail "executions label='${v}' (기대 ['language', 'status'])"
 v="$(lab "$DUR")"; [ "$v" = "['language', 'status']" ] && pass "execution_duration label: $v" || fail "execution_duration label='${v}'"

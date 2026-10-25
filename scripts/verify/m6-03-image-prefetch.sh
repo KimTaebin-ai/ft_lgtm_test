@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M6-03 image-prefetch 검증. Debian VM(Linux)에서만 실행한다.
+# image-prefetch 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make clean && make 가 끝난 상태. (c) events 검사는 cold 실행(make clean && make) 직후에 해야 의미가 있다
 #       (events TTL 1h. cold = docker host 에서 workload + infra 이미지를 rmi 한 뒤의 실행).
 set -u

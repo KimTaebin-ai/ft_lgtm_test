@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M6-01 readme 정적 검증. README.md 가 subject VI / PRD 11장 형식을 지키고,
+# readme 정적 검증. README.md 가 subject VI 형식을 지키고,
 # 적힌 make 타겟·상대 경로·버전이 저장소의 실제 값과 일치하는지만 본다 (클러스터 불필요).
 # 판정은 Debian VM(Linux, GNU grep -P)에서 한다.
 set -u

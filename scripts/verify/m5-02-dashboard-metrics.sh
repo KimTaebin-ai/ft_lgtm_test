@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M5-02 dashboard-metrics 검증. Debian VM(Linux)에서만 실행한다.
+# dashboard-metrics 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다 (jq 없음).
 # Grafana 는 Ingress(grafana.lgtm.local)로 호출하므로 port-forward 를 쓰지 않는다.
 #  - 고정 uid 의 provisioned dashboard 가 있고, 모든 패널 쿼리가 /api/ds/query 로 실행되어 값이 있다

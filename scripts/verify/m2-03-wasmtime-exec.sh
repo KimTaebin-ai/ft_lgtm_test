@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# F-M2-03 wasmtime-exec 검증. Debian VM(Linux)에서만 실행한다.
+# wasmtime-exec 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
-# PRD 7.2 sandbox 5종(동시성 제외) + 추가 케이스 + 동시성(epoch 가 요청 간 간섭하지 않음) + Tempo TR-04 attribute.
+# sandbox 5종(동시성 제외) + 추가 케이스 + 동시성(epoch 가 요청 간 간섭하지 않음) + Tempo exec.* attribute.
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then
@@ -209,7 +209,7 @@ python3 -I -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2])
 v="$(field chello1 "d['timings_ms']['execute']")"
 [ -n "$v" ] && [ "$v" -lt 2000 ] 2>/dev/null && pass "동시 hello execute ${v}ms (< 2000, epoch 간섭 없음)" || fail "동시 hello execute='${v}'ms"
 
-# ---- 13. Tempo: TR-04 attribute, 실패 시 execute / root span ERROR ----
+# ---- 13. Tempo: exec.* attribute, 실패 시 execute / root span ERROR ----
 pf_forward observability tempo "$P_TEMPO:3200" || fail "port-forward (tempo) 실패"
 SUMMARIZE='import base64,json,sys
 d=json.load(sys.stdin)

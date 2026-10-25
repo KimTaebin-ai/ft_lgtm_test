@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M5-03 dashboard-traces 검증. Debian VM(Linux)에서만 실행한다.
+# dashboard-traces 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다 (jq 없음).
 # Grafana 는 Ingress(grafana.lgtm.local)로 호출하므로 port-forward 를 쓰지 않는다.
 #  - 고정 uid 의 provisioned dashboard 가 있고, 4개 패널(Trace duration / Mean / Slowest / Longest) 쿼리가 /api/ds/query 로 non-empty
@@ -47,7 +47,7 @@ import base64, json, os, re, sys, time, urllib.error, urllib.request
 
 UID = os.environ["GF_UID"]
 PW = os.environ.get("GF_PW", "")
-POLL_MAX = 120  # TraceQL metrics 는 trace 가 보이기까지 약 50초 걸린다 (F-M5-03 spike 실측 1회)
+POLL_MAX = 120  # TraceQL metrics 는 trace 가 보이기까지 약 50초 걸린다
 POLL_STEP = 3
 
 
@@ -223,7 +223,7 @@ if mode == "check":
         n = numbers(frames)
         out(st == 200 and len(n) > 0, "Longest 쿼리 non-empty (HTTP %s, 값 %d개, polling %d초 / 상한 %d초)" % (st, len(n), el, POLL_MAX))
         ids = exemplar_ids(frames)
-        # Tempo TraceQL metrics 의 exemplar traceId 는 앞자리 0 이 빠져 32자보다 짧을 수 있다. Tempo 는 짧은 id 도 같은 trace 로 조회한다 (F-M5-03 VM 실측)
+        # Tempo TraceQL metrics 의 exemplar traceId 는 앞자리 0 이 빠져 32자보다 짧을 수 있다. Tempo 는 짧은 id 도 같은 trace 로 조회한다
         out(len(ids) > 0 and all(re.fullmatch(r"[0-9a-f]{1,32}", i) for i in ids), "Longest 응답에 exemplar traceId %d개 (hex 1~32자, 앞자리 0 생략 허용)" % len(ids))
         out(bool(ids) and all(trace_opens(i) for i in ids), "Longest exemplar traceId %d개 모두 Tempo trace 조회 성공 (root span POST /api/execute)" % len(ids))
         print("INFO: Longest 최댓값 %.3fs" % (max(n) if n else float("nan")), flush=True)

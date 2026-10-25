@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# /etc/hosts 에 BEGIN/END 마커 블록을 쓴다. 재실행해도 블록은 1개 (INF-04).
+# /etc/hosts 에 BEGIN/END 마커 블록을 쓴다. 재실행해도 블록은 1개.
 # --remove: 블록만 지운다 (make fclean). 블록이 없으면 [skip].
 set -euo pipefail
 

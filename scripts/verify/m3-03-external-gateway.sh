@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M3-03 external-gateway 검증. Debian VM(Linux)에서만 실행한다.
+# external-gateway 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태 (kubo-0 Ready).
 # public gateway 성공 여부는 네트워크(NAT)에 따라 다르므로 통과 조건에 넣지 않는다.
 # 검사하는 것: make ipfs-check 가 끝까지 실행되고 정해진 형식으로 출력하는가, 테스트 CID 가 로컬 gateway 에서 열리는가, 결과가 HANDOFF 에 있는가.

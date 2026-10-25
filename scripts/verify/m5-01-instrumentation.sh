@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# F-M5-01 instrumentation 검증. Debian VM(Linux)에서만 실행한다.
+# instrumentation 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다 (jq 없음).
-# status 별 요청을 보내고 Tempo trace / Loki 로그 / Mimir 지표를 PRD 8.2, 8.3 과 대조한다.
-#  - span 구성, ERROR status, error event(message 하나, 512바이트 이하), TR-03/TR-04 attribute 가 응답과 일치
+# status 별 요청을 보내고 Tempo trace / Loki 로그 / Mimir 지표를 metric/span 명세와 대조한다.
+#  - span 구성, ERROR status, error event(message 하나, 512바이트 이하), code.*/exec.* attribute 가 응답과 일치
 #  - span status/event/로그 어디에도 사용자 입력에서 나온 문자열(식별자, panic 메시지)이 없다. 메시지는 분류형 문구만 쓴다
-#  - lgtm_output_bytes, histogram bucket 이 PRD 8.2 와 같다, lgtm_* label 에 cid/sha/trace 가 없다, exemplar 가 trace_id 를 가진다
+#  - lgtm_output_bytes, histogram bucket 이 telemetry 의 bucket 과 같다, lgtm_* label 에 cid/sha/trace 가 없다, exemplar 가 trace_id 를 가진다
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then

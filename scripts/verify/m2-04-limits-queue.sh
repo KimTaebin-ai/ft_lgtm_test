@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M2-04 limits-queue 검증. Debian VM(Linux)에서만 실행한다.
+# limits-queue 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 # 64KB → 413 (본문을 다 읽지 않음), 처리 2 + 대기 8, 동시 20개 → 429 정확히 10, lgtm_queue_rejected_total +10,
 # stage="queue" series, 대기 중 클라이언트가 끊으면 자리 반환, 413/429/400 은 lgtm_executions_total 에 안 들어감.
@@ -107,7 +107,7 @@ mval_at() {
 }
 # wait_stable : lgtm_executions_total 합계와 lgtm_queue_rejected_total 합계가 10초 간격 두 번 같을 때까지 기다린다 (상한 60초).
 # 직전 스크립트의 요청은 5초 reader 주기 + collector batch 때문에 늦게 Mimir 에 들어온다. 안정되기 전에 구간을 잡으면
-# 그 요청이 이번 increase() 구간에 섞인다 (F-M5-01 전체 verify 에서 m2-03 직후 실행 시 12 ≠ 11).
+# 그 요청이 이번 increase() 구간에 섞인다 (m2-03 직후 실행하면 기대 11 이 12 가 된다).
 # 안정된 시각(두 번째 읽기)을 STABLE_AT 에 남긴다. 안정되지 않고 상한에 닿으면 STABLE_OK=0.
 wait_stable() {
 	local prev="" cur i
@@ -123,14 +123,14 @@ wait_stable() {
 }
 # poll_increase <설명> <counter 이름> <기대 증가량> : 합계가 안정된 뒤 sum(increase(<counter>[기준 시각 이후 경과+5s])) 를 읽는다.
 # 기준 시각 T_BASE 는 시작 전에 wait_stable 로 잡은 안정 시각이다. +5s 는 reader 주기 한 번분이고, 기준 시각 앞 10초는 변화가 없었으므로 직전 스크립트의 요청은 구간에 들어오지 않는다.
-# raw 값의 차이(sum 끝값 - 시작값)는 rollout 으로 counter 가 리셋되면 이전 pod 값 때문에 틀린다 (F-M2-04 에서 -48 이 나온 방식). increase() 는 리셋을 보정한다
+# raw 값의 차이(sum 끝값 - 시작값)는 rollout 으로 counter 가 리셋되면 이전 pod 값 때문에 틀린다 (음수가 나올 수 있다). increase() 는 리셋을 보정한다
 # increase() 는 구간 끝을 외삽하므로 정수로 반올림한다. 0 초기화(execute.InitMetrics)가 있어야 series 의 첫 증가분을 놓치지 않는다
 poll_increase() {
 	local what="$1" counter="$2" want="$3" i d="" w
 	wait_stable || info "$what: 끝값이 60초 안에 안정되지 않음 (마지막 읽기 사용)"
 	for i in 1 2 3; do
 		w=$(( $(date +%s) - T_BASE + 5 ))
-		# 정확한 증가량 = 지금 합계 - 기준 시각 합계. increase() 는 구간 가장자리로 외삽해서 정수 11 이 11.8 로 읽히고 12 로 반올림됐다 (F-M6-04 진단: timeout 10.71 + success 1.07).
+		# 정확한 증가량 = 지금 합계 - 기준 시각 합계. increase() 는 구간 가장자리로 외삽해서 정수 11 이 11.8 로 읽히고 12 로 반올림될 수 있다.
 		# 구간에 counter reset 이 있으면 raw 차이가 틀리므로 그때만 increase() 를 쓴다
 		if [ "$(mval "resets(${counter}[${w}s])" | python3 -I -c 'import sys; print(int(float(sys.stdin.read() or 0)))')" = 0 ]; then
 			d="$(python3 -I -c 'import sys; print(int(round(float(sys.argv[1]) - float(sys.argv[2]))))' "$(mval "$counter")" "$(mval_at "$counter" "$T_BASE")")"
@@ -144,7 +144,7 @@ poll_increase() {
 		pass "$what 증가량 = $want (increase, 안정 후)"
 	else
 		fail "$what increase() = '$d' (기대 $want)"
-		# 진단: 어느 status 가 더 들어왔는지 (F-M6-04)
+		# 진단: 어느 status 가 더 들어왔는지
 		w=$(( $(date +%s) - T_BASE + 5 ))
 		info "DIAG ${counter} 구간 ${w}s status 별: $(curl -s --max-time 15 -G "http://127.0.0.1:$P_MIMIR/prometheus/api/v1/query" --data-urlencode "query=sum by (status) (increase(${counter}[${w}s]))" \
 			| python3 -I -c 'import json,sys
