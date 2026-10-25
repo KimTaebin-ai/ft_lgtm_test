@@ -294,17 +294,18 @@ Iterating after a code change: `make build deploy` is enough; `make re` is only 
 
 ### Use of AI
 
-Facts below come from the git history, `docs/HANDOFF.md` and `CLAUDE.md`, except the items marked as provided by the author.
+AI was used throughout this project, mainly for implementation. The design, the rules the implementation had to follow, and every approval were the author's. Commit trailers (`Co-Authored-By`) and `docs/HANDOFF.md` are the record of who did what.
 
-**Claude Code (CLI), model Claude Sonnet 5.5 — used for implementation work, one feature per branch.**
+**Design and decisions (author)**
+- **Architecture and stack**, written down in the PRD before any code: Rust compiled to WASM and run under WASI with wasmtime-go, compilation moved to a separate isolated pod, k3d, the LGTM stack behind a single OpenTelemetry Collector, raw manifests instead of Helm.
+- **Security model**: the execution limits (10 MB memory, 5 s, 10 kB output, 64 KB request body, 2 running + 8 queued), the two-layer defense for the compile step (a source deny-list, with pod isolation as the final layer), the NetworkPolicy scope, and the rule that no user input appears in traces or logs.
+- **How the work was delivered**: the project was split into 24 features across milestones M0–M6. Each feature had a written scope, an out-of-scope list, and acceptance criteria that could be checked by running a command.
+- **Engineering rules**, kept in `CLAUDE.md`: a failing verify script is committed before the implementation; only commands actually run on the VM count as verified; one VM lock across parallel sessions; every make target idempotent; no manual configuration (Grafana only through provisioning files); any deviation from the PRD is stopped and asked as an explicit "PRD change".
+- **Review**: every implementation plan was approved or sent back before coding started, and every result was reviewed before merging.
+- **Hands-on checks**: the manual scenarios in the VM's Firefox (limit cases in the playground, and metric → exemplar → trace → logs → IPFS), the IPFS reachability test on a campus network with UTM Bridged networking, and the question to the subject authors about the public gateway requirement.
 
-- Counted with `git log` on `origin/main` at commit `4d34bde`: 93 non-merge commits, 89 of them carry the trailer `Co-Authored-By: Claude Sonnet 5.5`; the other 4 are `d86043d` (first commit) and three `CLAUDE.md` rule updates (`53f6530`, `c99fa3a`, `5fb2d0c`). There are also 21 merge commits. The trailer is not disabled, so `git log` shows which commits were AI co-authored.
-- *Code:* backend (API, queue and limits, Wasmtime execution, compiler service, deny-list, IPFS upload, OpenTelemetry instrumentation), frontend (Monaco shell, result display), Kubernetes manifests, Dockerfiles, `Makefile` and helper scripts, Grafana dashboards.
-- *Verification scripts:* the `scripts/verify/*.sh` checks, each committed in a failing state before the implementation, plus unit tests.
-- *Research:* looking up current versions, defaults and APIs from official documentation and real command output (for example the Tempo 3 TraceQL metrics behaviour, wasmtime-go's stdout API, UTM port-forwarding documentation) and recording the findings in `docs/HANDOFF.md`.
-- *Documentation:* `docs/HANDOFF.md` feature blocks with verification tables, and this README.
-- *Working rules* (`CLAUDE.md`): plan first and implement after approval; a failing check first; only commands that were actually run and their output count as "verified"; no results from the macOS development host count as verification, only the Debian VM.
+**Implementation (Claude Code)**
+- Wrote the code, Kubernetes manifests, Makefile, scripts and verify scripts from the specifications above, ran them on the VM, and reported each result as claim / how it was checked / result. Counted with `git log` on `origin/main` at commit `4d34bde`, 89 of 93 non-merge commits carry the trailer `Co-Authored-By: Claude Sonnet 5.5` (the other 4 are the first commit and three `CLAUDE.md` rule updates).
 
-**Claude (claude.ai, chat) — used as a technical reviewer and decision partner**: drafting the PRD, writing a kickoff prompt for each feature, reviewing Claude Code's plans and results before approval or merge, and comparing technical options. All technical decisions and approvals were made by the author. *(Provided by the author; not verifiable from git.)*
-
-**What the author did** *(provided by the author; only the manual checks recorded in `docs/HANDOFF.md` can be traced in the repository)*. The author made all technical decisions and approvals: the stack (Rust compiled to WASM, Go + wasmtime-go, k3d, LGTM stack with an OpenTelemetry Collector), the security limits and the compiler isolation model, and every scope change recorded as "PRD change" in `docs/HANDOFF.md`. The author approved or rejected each Claude Code plan before implementation, reviewed every result before merging, and decided the merge order between parallel features. The author ran the manual checks in the VM's Firefox (failure and limit scenarios in the playground, and the metric → exemplar → trace → logs → IPFS walkthrough), ran the IPFS reachability test on a campus network with UTM Bridged networking, and contacted the subject authors about the public gateway requirement.
+**Review partner (Claude, chat)**
+- Used to draft and challenge the PRD, the per-feature prompts, and the plan and result reviews, and to compare technical options. Final decisions and approvals were made by the author.
