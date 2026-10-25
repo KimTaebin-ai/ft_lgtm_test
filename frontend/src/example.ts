@@ -1,4 +1,4 @@
-// FE-02: struct, trait, iterator 를 보여주는 예제. 실행하면 의미 있는 출력이 나온다.
+// struct, trait, iterator 를 보여주는 예제. 실행하면 의미 있는 출력이 나온다.
 export const EXAMPLE_CODE = `trait Shape {
     fn name(&self) -> String;
     fn area(&self) -> f64;

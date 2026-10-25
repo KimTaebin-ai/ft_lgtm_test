@@ -1,4 +1,4 @@
-// POST /api/execute (PRD 6.2). 모든 실패를 throw 가 아니라 ExecuteOutcome 으로 구분해 돌려준다.
+// POST /api/execute 클라이언트. 모든 실패를 throw 가 아니라 ExecuteOutcome 으로 구분해 돌려준다.
 export interface Timings {
   compile?: number
   execute?: number

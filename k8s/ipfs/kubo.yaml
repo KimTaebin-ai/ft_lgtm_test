@@ -1,4 +1,4 @@
-# F-M3-01 Kubo 노드 (PRD IP-01/04/05/08). 이미지 태그 고정: ipfs/kubo:v0.43.1 (amd64/arm64 multi-arch, 2026-10-22 Docker Hub 확인).
+# Kubo 노드. 이미지 태그 고정: ipfs/kubo:v0.43.1 (amd64/arm64 multi-arch).
 # 설정은 /container-init.d 의 스크립트가 매 기동마다 코드로 적용한다 (수동 설정 금지). 키 근거: kubo docs/config.md, docs/telemetry.md.
 apiVersion: v1
 kind: ConfigMap
@@ -59,7 +59,7 @@ spec:
             - {name: gateway, containerPort: 8080, protocol: TCP}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true # 쓰기 경로: /data/ipfs(PVC), /tmp(emptyDir). 실측 결과는 HANDOFF
+            readOnlyRootFilesystem: true # 쓰기 경로: /data/ipfs(PVC), /tmp(emptyDir)
             capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: data, mountPath: /data/ipfs}
@@ -109,7 +109,7 @@ spec:
   ports:
     - {name: gateway, port: 8080, targetPort: gateway}
 ---
-# ipfs.lgtm.local → gateway 8080 만 (API 는 Ingress 에 없다, IP-08)
+# ipfs.lgtm.local → gateway 8080 만 (API 는 Ingress 에 없다)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata: {name: kubo-gateway, namespace: ipfs}

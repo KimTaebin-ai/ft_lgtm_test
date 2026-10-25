@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backend / compiler 이미지 빌드 + k3d image import (INF-07). idempotent.
+# backend / compiler 이미지 빌드 + k3d image import. idempotent.
 # env: CLUSTER_NAME, BACKEND_IMAGE, COMPILER_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/build/image-tag.sh).
 set -euo pipefail
 

@@ -86,7 +86,7 @@ fn main() { let v: Vec<u32> = (1..10).filter(|x| x % 2 == 0).collect(); println!
 }
 
 func TestCheckSourceKnownFalsePositives(t *testing.T) {
-	// 한계: 문자열/주석 안의 패턴도 차단한다 (HANDOFF 기록). 동작을 고정해 둔다.
+	// 한계: 문자열/주석 안의 패턴도 차단한다. 동작을 고정해 둔다.
 	for name, src := range map[string]string{
 		"문자열 안":  `fn main() { println!("include_str!"); }`,
 		"주석 안":   "// env!(\"X\")\nfn main() {}",

@@ -1,4 +1,4 @@
-# F-M1-01 Loki. single binary(-target=all), filesystem, schema v13 + tsdb, structured metadata, OTLP(/otlp).
+# Loki. single binary(-target=all), filesystem, schema v13 + tsdb, structured metadata, OTLP(/otlp).
 # 근거: https://grafana.com/docs/loki/v3.7.x/send-data/otel/
 apiVersion: v1
 kind: ConfigMap

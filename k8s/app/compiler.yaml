@@ -1,6 +1,6 @@
-# F-M2-01 compiler. image 는 make deploy 가 __COMPILER_IMAGE__ 를 소스 hash 태그로 치환한다. Ingress 없음 (ClusterIP only).
-# resources: SEC-10 변경(PRD 변경) — 동시 compile 2개 합계 limit 2Gi, request 256Mi.
-# F-M2-02 하드닝: readOnlyRootFilesystem(쓰기는 emptyDir /work 만), enableServiceLinks false, NetworkPolicy(아래), 소스 deny-list(서비스 코드).
+# compiler. image 는 make deploy 가 __COMPILER_IMAGE__ 를 소스 hash 태그로 치환한다. Ingress 없음 (ClusterIP only).
+# resources: 동시 compile 2개 합계 limit 2Gi, request 256Mi.
+# 하드닝: readOnlyRootFilesystem(쓰기는 emptyDir /work 만), enableServiceLinks false, NetworkPolicy(아래), 소스 deny-list(서비스 코드).
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: compiler, namespace: lgtm, labels: {app: compiler}}
@@ -46,7 +46,7 @@ spec:
   ports:
     - {name: http, port: 80, targetPort: http}
 ---
-# F-M2-02: backend(app=backend)에서 8080 만 받는다.
+# backend(app=backend)에서 8080 만 받는다.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: compiler-ingress, namespace: lgtm}
@@ -59,7 +59,7 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
 ---
-# F-M2-02: DNS(53)와 otel-collector 4317 만 나간다. 외부·다른 Service 로는 나갈 수 없다.
+# DNS(53)와 otel-collector 4317 만 나간다. 외부·다른 Service 로는 나갈 수 없다.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: compiler-egress, namespace: lgtm}

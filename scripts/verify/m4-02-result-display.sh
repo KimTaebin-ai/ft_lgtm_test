@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M4-02 result-display 검증. Debian VM(Linux)에서만 실행한다.
+# result-display 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make (build + deploy) 가 끝난 상태. make deploy/clean 은 호출하지 않는다.
 set -u
 

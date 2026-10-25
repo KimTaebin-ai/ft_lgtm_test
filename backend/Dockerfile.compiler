@@ -1,6 +1,6 @@
-# F-M2-01 compiler 이미지. 빌드 컨텍스트는 backend/ (docker build -f Dockerfile.compiler backend/).
+# compiler 이미지. 빌드 컨텍스트는 backend/ (docker build -f Dockerfile.compiler backend/).
 # rust 이미지 태그는 https://hub.docker.com/v2/repositories/library/rust/tags 와
-# https://static.rust-lang.org/dist/channel-rust-stable.toml 로 확인한 값 (rustc 1.99.1, 2026-10-22 확인).
+# https://static.rust-lang.org/dist/channel-rust-stable.toml 로 확인한 값 (rustc 1.99.1).
 FROM golang:1.27.3-trixie AS build
 ENV GOTOOLCHAIN=local
 WORKDIR /src

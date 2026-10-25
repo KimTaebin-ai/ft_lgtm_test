@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M1-02 collector-grafana 검증. Debian VM(Linux)에서만 실행한다.
+# collector-grafana 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 set -u
 

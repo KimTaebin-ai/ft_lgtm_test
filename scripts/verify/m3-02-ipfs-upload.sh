@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M3-02 ipfs-upload 검증. Debian VM(Linux)에서만 실행한다.
+# ipfs-upload 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 # /api/execute 결과가 Kubo 에 main.rs / output.txt / status.json 디렉토리로 올라가고(pin), 같은 입력이면 같은 CID,
 # Tempo ipfs.upload span 의 ipfs.cid, Kubo 5001 이 막히면 10초 timeout → 결과는 반환하고 cid/ipfs_url=null + span ERROR.

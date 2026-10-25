@@ -1,4 +1,4 @@
-// Package compile은 rustc를 요청마다 격리된 임시 디렉토리에서 실행한다 (F-M2-01).
+// Package compile은 rustc를 요청마다 격리된 임시 디렉토리에서 실행한다.
 // 동시 실행 수 제한(semaphore), 15초 timeout, 프로세스 그룹 kill, 임시 디렉토리 삭제를 담당한다.
 package compile
 
@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	// DefaultTimeout은 SEC-07의 compile 제한 시간. semaphore 획득 이후부터 센다.
+	// DefaultTimeout은 compile 제한 시간. semaphore 획득 이후부터 센다.
 	DefaultTimeout = 15 * time.Second
-	// DefaultConcurrency는 SEC-07: pod 안 동시 compile 수.
+	// DefaultConcurrency는 pod 안 동시 compile 수.
 	DefaultConcurrency = 2
 
 	maxStderrBytes = 64 << 10
@@ -73,7 +73,7 @@ func RustcCmd(ctx context.Context, dir string) *exec.Cmd {
 }
 
 // rustcEnv는 rustc에 넘기는 환경변수 전체다. 명시한 5개만 전달하고 프로세스 환경은 상속하지 않는다 (env -i 동등).
-// 소스가 env!/option_env!/std::env 로 읽어도 다른 Service 주소나 비밀값이 없게 하려는 것이다 (F-M2-02).
+// 소스가 env!/option_env!/std::env 로 읽어도 다른 Service 주소나 비밀값이 없게 하려는 것이다.
 func rustcEnv(dir string) []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -85,7 +85,7 @@ func rustcEnv(dir string) []string {
 }
 
 // Run은 src를 컴파일해 wasm 바이트를 반환한다. 반환 에러는 *CompileError, ErrTimeout, ctx 에러, 그 외(내부 오류) 중 하나다.
-// 대기 시간(queue wait)도 반환한다. semaphore가 가득 차면 거부하지 않고 기다린다 (거부는 F-M2-04에서 backend가 담당).
+// 대기 시간(queue wait)도 반환한다. semaphore가 가득 차면 거부하지 않고 기다린다 (거부는 backend가 담당).
 func (r *Runner) Run(ctx context.Context, src []byte) (wasm []byte, wait time.Duration, err error) {
 	t0 := time.Now()
 	select {

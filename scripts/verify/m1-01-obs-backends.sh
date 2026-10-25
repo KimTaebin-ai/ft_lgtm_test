@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M1-01 obs-backends 검증. Debian VM(Linux)에서만 실행한다.
+# obs-backends 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make deploy 가 끝난 상태.
 set -u
 
@@ -119,7 +119,7 @@ for _ in $(seq 1 30); do
 done
 [ "${body_hit:-0}" -ge 1 ] && pass "Loki query_range 로 로그 조회" || fail "Loki 로그 조회 실패"
 
-# 본문 검색이 아니라 structured metadata(trace_id)로 필터되는지: PRD 8.5 Trace→Logs customQuery 전제
+# 본문 검색이 아니라 structured metadata(trace_id)로 필터되는지: Grafana Trace→Logs customQuery 전제
 sm_hit="$(loki_query "{service_name=\"verify-m1-01\"} | trace_id=\"$LOG_TRACE_ID\"" | grep -c 'verify-m1-01 hello')"
 [ "${sm_hit:-0}" -ge 1 ] && pass "Loki structured metadata 필터(| trace_id=\"...\") 로 조회" || fail "Loki structured metadata trace_id 필터 0건"
 
@@ -138,7 +138,7 @@ mt="$(printf '%s\n' "$cfg" | awk '/^multitenancy_enabled:/ {print $2; exit}')"
 [ "$mt" = "false" ] && pass "Mimir /config multitenancy_enabled=false" || fail "Mimir multitenancy_enabled='${mt:-없음}'"
 
 # ---- 6. 외부 노출 없음 ----
-# F-M1-02 부터 같은 namespace 에 Grafana Ingress 가 있다. backend 3종을 가리키는 Ingress 만 센다
+# 같은 namespace 에 Grafana Ingress 가 있다. backend 3종을 가리키는 Ingress 만 센다
 ing_n="$(k -n "$NS" get ingress -o jsonpath='{range .items[*]}{range .spec.rules[*].http.paths[*]}{.backend.service.name}{"\n"}{end}{end}' 2>/dev/null | grep -cE '^(mimir|loki|tempo)$')"
 [ "$ing_n" -eq 0 ] && pass "mimir/loki/tempo 를 가리키는 Ingress 없음" || fail "backend 를 가리키는 Ingress ${ing_n}개"
 

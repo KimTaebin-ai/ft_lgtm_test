@@ -393,7 +393,7 @@ func TestInvalidRequestRecordsNoMetric(t *testing.T) {
 	}
 }
 
-// execute 단계 status 매핑, 응답 필드, TR-04 attribute, 실패 시 execute/root span ERROR.
+// execute 단계 status 매핑, 응답 필드, exec.* attribute, 실패 시 execute/root span ERROR.
 func TestExecuteStatusMappingAndSpanAttributes(t *testing.T) {
 	cases := []struct {
 		name    string

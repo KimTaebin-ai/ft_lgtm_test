@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M6-02 fresh-vm 정적 검증. 새 VM에서 make 한 번으로 동작하기 위한 조건(폰트, sudo 순서, 대기 상한,
+# fresh-vm 정적 검증. 새 VM에서 make 한 번으로 동작하기 위한 조건(폰트, sudo 순서, 대기 상한,
 # fclean/re, 공개 gateway 링크, 출제자 확인 문구, 재부팅 내성 설정)을 본다. 재부팅 자체는 scripts/tools/reboot-check.sh.
 # 판정은 Debian VM(Linux)에서 한다.
 set -u

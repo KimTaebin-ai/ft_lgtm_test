@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M6-05 repo-layout 정적 검증 (클러스터 불필요).
+# repo-layout 정적 검증 (클러스터 불필요).
 # 루트 파일 목록, .gitkeep / k8s/dummy 부재, 옛 경로 문자열 0건, Makefile 이 참조하는 스크립트 존재를 본다.
 # 판정은 Debian VM(Linux, GNU grep)에서 한다.
 set -u
@@ -41,7 +41,7 @@ patterns=(
 targets=(Makefile README.md CLAUDE.md scripts backend k8s frontend/Dockerfile frontend/.dockerignore)
 for re in "${patterns[@]}"; do
 	hits="$(grep -rnE --exclude-dir=node_modules -e "$re" "${targets[@]}" 2>/dev/null | grep -v "^$SELF:")"
-	# m3-01 / m4-02 의 dummy 부재 검사는 유지한다 (F-M6-05 결정)
+	# m3-01 / m4-02 의 dummy 부재 검사는 유지한다
 	[ "$re" = 'k8s/dummy' ] && hits="$(printf '%s\n' "$hits" | grep -vE '^scripts/verify/m(3-01|4-02)-[a-z-]+\.sh:' | grep .)"
 	[ -z "$hits" ] && pass "옛 경로 0건: $re" || fail "옛 경로 남음 ($re):"$'\n'"$hits"
 done

@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// MaxSpanMessageBytes는 span status description과 error event message의 상한이다 (TR-02).
+// MaxSpanMessageBytes는 span status description과 error event message의 상한이다.
 const MaxSpanMessageBytes = 512
 
 // Classified는 사용자 입력에서 나온 문자열이 없는 분류형 문구(예: "rustc failed [E0425]")를 돌려주는 에러다.

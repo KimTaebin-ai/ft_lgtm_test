@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M2-01 compiler-service 검증. Debian VM(Linux)에서만 실행한다.
+# compiler-service 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 # 15초 timeout 은 VM 에서 결정적으로 재현하기 어려워 단위 테스트(느린 명령 주입, 프로세스 그룹 kill 포함)로 대체한다 (아래 8번).
 set -u

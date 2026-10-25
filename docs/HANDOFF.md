@@ -10,6 +10,64 @@
 ### 다음 단계
 -->
 
+## F-M6-07 comment-cleanup (브랜치 chore/m6-07-comment-cleanup)
+
+코드 주석과 dashboard description만 바꿨다. 코드, 설정 값, 스크립트 로직, 테스트 단언은 바꾸지 않았다. VM 검증은 하지 않았다(사용자 지시: 주석만 변경). 확인은 로컬 diff로 했다.
+
+### 한 일
+- `scripts/verify/m6-07-comment-cleanup.sh`를 먼저 커밋했다(236a293). (a) origin/main 대비 주석도 빈 줄도 아닌 +/- 줄을 목록으로 출력한다(사람이 확인). (b) k8s ConfigMap data 블록(`key: |`) 내용이 바뀌지 않았는지 본다. (c) 주석과 dashboard description에 남은 피처 ID / PRD 번호 / 개발 기록 참조 / 날짜를 센다. (a)(b)는 git이 없거나 diff가 없으면 SKIP하고, (c)는 이후에도 쓰는 검사다. Makefile VERIFY_ALL에는 넣지 않았다(Makefile 로직을 바꾸지 않기 위해).
+- 유형별 정리 (주석 부분만 센 값. before는 origin/main에 `CHECK_ROOT`로 돌린 (c), after는 0):
+
+| 유형 | before | after |
+|---|---|---|
+| 피처 ID (`F-Mx-yy`) | 75 | 0 |
+| PRD 번호 (`PRD x.y`, SEC-/TR-/IP-/INF-/FE-/BE-, dashboard description 2건 포함) | 63 | 0 |
+| 개발 기록 참조 (HANDOFF, spike, 타임라인, 검증에서, 실측은. 허용 목록 제외) | 7 | 0 |
+| 날짜 | 4 | 0 |
+
+- 그 밖의 정리:
+  - 변경 이력 3건을 지웠다: compiler.yaml "SEC-10 변경(PRD 변경)", grafana.yaml "PRD 14장 해소", handler.go "PRD 6.2 변경".
+  - 측정 로그를 압축했다. backend.yaml resources 4줄을 2줄로 줄이고 "동시 20건 peak 약 70MB"만 남겼다. import-images.sh의 cold 측정 기록은 이유 문장만 남겼다.
+  - PRD 번호가 내용을 대신하던 곳은 내용으로 바꿨다(TR-03 → `code.*` attribute, TR-04 → `exec.*` attribute, "PRD 8.3: compile → rustc" → "span 트리: compile → rustc").
+- 낡은 주석 2건:
+  - `execute/compiler_client.go`: "backend 메모리 limit(128Mi)" → 512Mi (k8s/app/backend.yaml 실제 값).
+  - Makefile 1행 "미구현 타겟은 TODO <피처ID> 출력": TODO 타겟이 0개(`grep TODO Makefile`은 1행뿐)라 문장을 지웠다.
+- 주석의 숫자를 실제 값과 대조했다(preStop 10s, Shutdown 60s, grace 75s, maxQueueWait 45s, compiler 20s, ipfs 10s, 10MiB, 10240, 64KB, 64KiB, 2Gi/256Mi, 512Mi/64Mi, telemetry Shutdown 10s, reboot-check 180, wait-dashboards 150, POLL_MAX 120). 불일치는 128Mi 1건뿐이었다.
+- 주석 처리된 코드 블록은 0건이었다(grep으로 확인). Go 공개 식별자의 doc 주석은 Go 관례라 유지했다.
+
+### 남긴 것과 이유
+- 허용 목록 ((c)의 ALLOW): m3-03의 HANDOFF(스크립트가 실제로 docs/HANDOFF.md를 검사), m6-05의 HANDOFF(경로 예외), m6-04의 "타임라인"(스크립트 안 진단 루프 이름).
+- 보안과 순서 설명은 번호만 빼고 내용을 유지했다:
+  - wasmexec sandbox 설명(capability 0, 10MiB, epoch, fd_write shadowing)
+  - deny-list 한계
+  - compiler/kubo NetworkPolicy
+  - 사용자 입력을 span/로그에 넣지 않는 이유(errors.go, failspan.go, handler.go step)
+  - exemplar는 root span End 전에 기록(handler.go writeResult, metrics.go RecordExecution)
+  - 슬롯 반환 시점(handler.go ServeHTTP)
+  - preStop + Shutdown + grace 순서(backend.yaml, cmd/api/main.go)
+- tempo.yaml 상단의 `local_blocks` 설명은 m5-03이 검사하므로 유지했다.
+- verify 스크립트 사이 참조(m1-01, m2-04 등)는 실제 파일 이름이라 유지했다.
+
+### 건드리지 않은 ConfigMap data 블록 안 주석 (바꾸면 ConfigMap이 바뀌어 pod가 재시작된다)
+- k8s/ipfs/kubo.yaml `001-lgtm-config.sh: |` 블록 (9~26행)
+- k8s/observability/loki.yaml `loki.yaml: |` 블록 29, 41행 (41행에 `PRD 8.5`가 남아 있음)
+- k8s/observability/mimir.yaml `mimir.yaml: |` 블록 11~82행 (76행에 `PRD 8.5`가 남아 있음)
+- collector/grafana/tempo의 data 블록에는 `#` 주석이 없다.
+- dashboards/lgtm-traces.json Longest 패널 description의 "(실측 1회)"는 PRD 번호가 아니라서 이번 범위(description은 PRD 번호만)에 넣지 않았다.
+
+### 된 것 (VM 미실행, 주석만 변경, 로컬 diff 확인)
+- m6-07 (a): 주석이 아닌 변경 줄은 4쌍뿐이다. dashboards description 2쌍(승인된 변경)과 코드 끝 주석 2쌍(kubo.yaml `readOnlyRootFilesystem: true # ...`, m5-03 `POLL_MAX = 120  # ...`)이다. 두 줄 모두 코드 부분은 같아서 되돌린 줄은 없다.
+- m6-07 (b): k8s 9개 파일 모두 data 블록 변경 없음. (c): 4개 유형 모두 0건, RESULT 모두 통과.
+- 로컬 `bash -n`: scripts/*.sh 41개, 실패 0. 로컬 `gofmt -l .`(backend/): 출력 없음.
+- 위 실행은 모두 macOS에서 했다(m6-07은 `uname` shim으로 Linux 검사를 우회). CLAUDE.md 기준으로는 VM 검증이 아니다.
+
+### 안 된 것
+- VM에서 m6-07, go vet / go test, `make build deploy`, `kubectl diff`, m1-03 / m2-01 / m2-03 / m6-04 / m5-02 / m5-03을 돌리지 않았다(사용자 지시. 작업 중 ssh lgtm-vm도 timeout이었다).
+- 236a293 커밋 메시지의 "(c) 실패"는 정리 전 origin/main에 로컬로 (c)를 돌린 결과(before 개수가 0이 아님)다. VM에서 확인한 값은 아니다.
+
+### 다음 단계
+- 다음 VM 작업 때 `make build deploy`를 돌려 wait-dashboards 통과를 확인하고, m6-07과 m5-02/m5-03을 1회 돌린다(dashboards description이 바뀌어 grafana-dashboards ConfigMap이 바뀐다).
+
 ## F-M6-02 fresh-vm (브랜치 feat/m6-02-fresh-vm)
 
 진행 방식 변경(사용자 지시): 개발 VM은 쓰지 않는다. 검증은 사용자가 새 VM(192.168.64.8) 콘솔에서 하고, Claude Code는 이 VM에 ssh로 접속하지 않는다. 로컬(macOS)에서는 bash -n, shellcheck, make -n, hosts.sh 임시 파일 테스트만 했다(검증으로 치지 않음).

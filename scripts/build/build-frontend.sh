@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# frontend 이미지 빌드 + k3d image import (INF-07). idempotent.
+# frontend 이미지 빌드 + k3d image import. idempotent.
 # env: CLUSTER_NAME, FRONTEND_IMAGE (Makefile 이 export). 태그는 소스 hash (scripts/build/image-tag.sh).
 set -euo pipefail
 

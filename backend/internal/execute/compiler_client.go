@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	// compilerTimeout은 compiler의 15초 timeout(SEC-07) + 네트워크/응답 읽기 여유 5초.
+	// compilerTimeout은 compiler의 15초 timeout + 네트워크/응답 읽기 여유 5초.
 	compilerTimeout = 20 * time.Second
-	// maxWasmBytes는 compiler 응답 상한이다. 이후 단계(Wasmtime 적재, IPFS 업로드)와 backend 메모리 limit(128Mi)를
-	// 보호하려는 값이다. opt-level=1 wasip1 hello world는 수백 KB~2MB 수준이라 8MiB면 여유가 크다 (실측은 HANDOFF).
+	// maxWasmBytes는 compiler 응답 상한이다. 이후 단계(Wasmtime 적재, IPFS 업로드)와 backend 메모리 limit(512Mi)를
+	// 보호하려는 값이다. opt-level=1 wasip1 hello world는 수백 KB~2MB 수준이라 8MiB면 여유가 크다.
 	maxWasmBytes = 8 << 20
 	// maxStderrBytes는 compiler가 이미 64KiB로 자른 stderr를 한 번 더 방어적으로 자르는 상한이다.
 	maxStderrBytes = 64 << 10
@@ -42,7 +42,7 @@ type compilerClient struct {
 }
 
 // newCompilerClient의 http.Client는 일부러 otelhttp.NewTransport를 쓰지 않는다. transport가 HTTP client span을
-// 하나 더 만들어 rustc span의 parent가 compile이 아니게 되기 때문이다 (PRD 8.3: compile → rustc).
+// 하나 더 만들어 rustc span의 parent가 compile이 아니게 되기 때문이다 (span 트리: compile → rustc).
 // traceparent는 compile span ctx에서 직접 주입한다.
 func newCompilerClient(url string) *compilerClient {
 	return &compilerClient{url: url, http: &http.Client{Timeout: compilerTimeout}}

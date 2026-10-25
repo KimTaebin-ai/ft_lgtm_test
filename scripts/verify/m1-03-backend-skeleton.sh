@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F-M1-03 backend-skeleton 검증. Debian VM(Linux)에서만 실행한다.
+# backend-skeleton 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
 set -u
 
@@ -96,7 +96,7 @@ v="$(printf '%s' "$OK_BODY" | pyj "d['status']")"
 TRACE_ID="$(printf '%s' "$OK_BODY" | pyj "d['trace_id']")"
 [ "${#TRACE_ID}" = "32" ] && pass "trace_id 32자 hex" || fail "trace_id='${TRACE_ID}'"
 
-# ---- 3. Tempo: span 5개 (F-M2-01: compiler 의 rustc span 추가), root 이름, parent, TR-03 attribute ----
+# ---- 3. Tempo: span 5개 (compiler 의 rustc span 포함), root 이름, parent, code.* attribute ----
 pf_ok=1
 pf_start loki "$P_LOKI:3100" || pf_ok=0
 pf_start tempo "$P_TEMPO:3200" || pf_ok=0
@@ -197,7 +197,7 @@ dt="$(python3 -I -c 'import sys; print(float(sys.argv[2])-float(sys.argv[1]))' "
 ok="$(python3 -I -c 'import sys; print(1 if 2.0 <= float(sys.argv[1]) <= 3.5 else 0)' "$dt")"
 [ "$HTTP_CODE" = "200" ] && [ "$ok" = "1" ] && pass "느린 요청 소요 ${dt}s (2~3.5s 허용)" || fail "느린 요청 HTTP ${HTTP_CODE} 소요 ${dt}s"
 
-# ---- 8. 회귀: lgtm.local / 은 frontend(F-M4-01 이후), /healthz 는 backend 가 아니다 (frontend SPA fallback) ----
+# ---- 8. 회귀: lgtm.local / 은 frontend, /healthz 는 backend 가 아니다 (frontend SPA fallback) ----
 root_body="$(lurl "http://$HOST/")"
 [ "$(lurl -o /dev/null -w '%{http_code}' "http://$HOST/")" = "200" ] && pass "lgtm.local / → 200" || fail "lgtm.local / 200 아님"
 case "$root_body" in *'id="root"'*) pass "lgtm.local / 본문이 frontend HTML" ;; *) fail "lgtm.local / 본문='${root_body}'" ;; esac

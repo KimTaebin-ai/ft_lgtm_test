@@ -1,4 +1,4 @@
-// Package ipfs는 Kubo HTTP API(5001, 클러스터 내부 Service)로 디렉토리를 올린다 (F-M3-02).
+// Package ipfs는 Kubo HTTP API(5001, 클러스터 내부 Service)로 디렉토리를 올린다.
 package ipfs
 
 import (
@@ -33,7 +33,7 @@ type Client struct {
 // New는 baseURL(예: http://kubo-api.ipfs.svc.cluster.local:5001)을 가리키는 Client를 만든다.
 //
 // keep-alive를 끈다: 업로드는 드물고 클러스터 안이라 연결 비용이 작다. keep-alive가 켜져 있을 때는 Kubo 5001을 NetworkPolicy로
-// 막은 뒤에도 업로드가 성공했다(F-M3-02 검증에서 관측. 기존 연결 재사용 때문으로 추정). 끄면 차단이 곧바로 실패로 나타난다.
+// 막은 뒤에도 업로드가 성공했다(기존 연결 재사용 때문으로 추정). 끄면 차단이 곧바로 실패로 나타난다.
 func New(baseURL string) *Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true

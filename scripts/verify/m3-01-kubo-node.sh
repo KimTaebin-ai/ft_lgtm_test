@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# F-M3-01 kubo-node 검증. Debian VM(Linux)에서만 실행한다.
+# kubo-node 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make cluster && make build && make deploy 가 끝난 상태.
-# 외부 gateway(ipfs.io) 도달은 F-M3-03 범위라 여기서 확인하지 않는다.
+# 외부 gateway(ipfs.io) 도달은 m3-03 이 보므로 여기서 확인하지 않는다.
 set -u
 
 if [ "$(uname -s)" != "Linux" ]; then
@@ -90,7 +90,7 @@ case "$list" in *main.rs*output.txt*) pass "디렉토리 목록에 main.rs, outp
 code="$(gcode "http://$HOST/ipfs/$DIR_CID/main.rs")"
 [ "$code" = "200" ] && pass "디렉토리 안 파일 200" || fail "디렉토리 안 파일 code=${code}"
 
-# ---- 5. API 는 Ingress 로 노출되지 않는다 (IP-08) ----
+# ---- 5. API 는 Ingress 로 노출되지 않는다 ----
 code="$(gcode -X POST "http://$HOST/api/v0/id")"
 [ "$code" != "200" ] && pass "ipfs.lgtm.local/api/v0/id (POST) 200 아님 (code=${code})" || fail "ipfs.lgtm.local/api/v0/id 가 200"
 code="$(gcode "http://$HOST/api/v0/id")"

@@ -14,7 +14,7 @@ import (
 	"lgtm/backend/internal/telemetry"
 )
 
-// MaxSourceBytes는 compiler가 받는 소스 상한. 413/요청 크기 정책은 F-M2-04 범위라 여기서는 400으로만 거부한다.
+// MaxSourceBytes는 compiler가 받는 소스 상한. 413/요청 크기 정책은 backend가 맡으므로 여기서는 400으로만 거부한다.
 const MaxSourceBytes = 1 << 20
 
 // ClassHeader는 422 응답에 붙는 분류형 문구다. backend가 span/event/로그에 쓴다.
@@ -56,7 +56,7 @@ func NewHandler(r *Runner, log *slog.Logger) http.Handler {
 		}
 		span.SetAttributes(attribute.Int("code.size_bytes", len(src)))
 
-		// rustc 실행 전 소스 deny-list (F-M2-02). 위반은 사용자 코드 오류라 422다.
+		// rustc 실행 전 소스 deny-list. 위반은 사용자 코드 오류라 422다.
 		if v := CheckSource(string(src)); v != nil {
 			class := "source denied [" + v.Rule + "]"
 			telemetry.FailSpan(span, class)

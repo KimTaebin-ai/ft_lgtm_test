@@ -10,7 +10,7 @@ import (
 	"lgtm/backend/internal/wasmexec"
 )
 
-// 업로드 디렉토리의 파일 이름은 고정 3개다. 사용자 입력은 경로에 들어가지 않는다 (PRD IP-02).
+// 업로드 디렉토리의 파일 이름은 고정 3개다. 사용자 입력은 경로에 들어가지 않는다.
 const (
 	fileMain   = "main.rs"
 	fileOutput = "output.txt"

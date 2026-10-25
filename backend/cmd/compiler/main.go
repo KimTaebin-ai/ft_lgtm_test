@@ -1,4 +1,4 @@
-// Command compiler는 Rust 소스를 wasm32-wasip1로 컴파일하는 서비스다 (F-M2-01).
+// Command compiler는 Rust 소스를 wasm32-wasip1로 컴파일하는 서비스다.
 package main
 
 import (
@@ -21,7 +21,7 @@ import (
 	"lgtm/backend/internal/telemetry"
 )
 
-// SpanName은 PRD 8.3 트리의 compile → rustc. backend compile span의 자식 server span이다.
+// SpanName은 compiler server span 이름이다 (span 트리: compile → rustc). backend compile span의 자식이다.
 const SpanName = "rustc"
 
 func main() {

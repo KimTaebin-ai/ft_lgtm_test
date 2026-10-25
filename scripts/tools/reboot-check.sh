@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 재부팅 내성 확인 (F-M6-02). VM 재부팅 직후 로그인해서 실행한다.
+# 재부팅 내성 확인. VM 재부팅 직후 로그인해서 실행한다.
 # 부팅 시각(/proc/uptime) 기준 LIMIT 초 안에 (1) kubectl get pods -A 가 전부 Running(+Ready) 또는 Completed,
 # (2) curl --resolve 로 lgtm.local 200 이 되면 PASS. 상태는 2초마다 본다.
 # usage: scripts/tools/reboot-check.sh [LIMIT초, 기본 180]

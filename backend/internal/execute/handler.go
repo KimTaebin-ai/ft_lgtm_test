@@ -1,5 +1,5 @@
-// Package execute는 POST /api/execute 핸들러다. compile은 compiler 서비스를 호출하고(F-M2-01),
-// execute는 wasmtime-go로 실제 실행하고(F-M2-03), 결과는 Kubo로 디렉토리 업로드한다(F-M3-02).
+// Package execute는 POST /api/execute 핸들러다. compile은 compiler 서비스를 호출하고,
+// execute는 wasmtime-go로 실제 실행하고, 결과는 Kubo로 디렉토리 업로드한다.
 package execute
 
 import (
@@ -24,11 +24,11 @@ import (
 	"lgtm/backend/internal/wasmexec"
 )
 
-// RootSpanName은 TR-06: otelhttp 기본값에 의존하지 않고 코드에서 명시한다.
+// RootSpanName은 otelhttp 기본값에 의존하지 않고 코드에서 명시한다.
 const RootSpanName = "POST /api/execute"
 
 // 응답 status. compile_error는 사용자 코드 원인(rustc 에러, compile timeout), internal_error는 플랫폼 원인이다.
-// 둘을 나눠야 lgtm_executions{status}와 trace에서 장애와 사용자 오류를 구분할 수 있다 (PRD 6.2 변경).
+// 둘을 나눠야 lgtm_executions{status}와 trace에서 장애와 사용자 오류를 구분할 수 있다.
 const (
 	statusSuccess       = "success"
 	statusCompileError  = "compile_error"
@@ -36,10 +36,10 @@ const (
 )
 
 const (
-	// maxBodyBytes는 요청 body 상한이다 (PRD BE-01, SEC-06). JSON 래핑을 포함한 body 전체 기준.
+	// maxBodyBytes는 요청 body 상한이다. JSON 래핑을 포함한 body 전체 기준.
 	maxBodyBytes = 64 * 1024
 
-	// 동시 처리 2 + 대기 8 (PRD BE-09, SEC-07, SEC-08). 큐 범위는 compile + execute + ipfs.upload 전체다.
+	// 동시 처리 2 + 대기 8. 큐 범위는 compile + execute + ipfs.upload 전체다.
 	maxActive  = 2
 	maxWaiting = 8
 	// maxQueueWait는 대기 상한 시간이다. 최악 대기 = 앞 8개 × 요청 1건 소요 / 2. 슬롯은 ipfs.upload가 끝날 때까지 점유된다.
@@ -47,15 +47,15 @@ const (
 	// Kubo가 응답하지 않으면(업로드 10초 timeout) 짧은 코드도 슬롯을 약 10.3s 점유한다: 8×10.3/2 ≈ 41s < 45s라 대기열이 429로 잘리지 않고 처리된다.
 	// 단 loop {} 요청이 몰리고 Kubo까지 죽은 최악 조합(0.25+5.1+10 ≈ 15.4s)은 8×15.4/2 ≈ 61s > 45s라 초과분은 429다.
 	// 이론 최악(compile 15s + execute 5s + ipfs 10s)은 8×30/2 = 120s라 사용자가 기다릴 수 없으므로,
-	// 정상 최악의 약 2배인 45초에서 429로 돌려보낸다. 무한 대기는 전부 timeout이 되므로 금지 (SEC-08).
+	// 정상 최악의 약 2배인 45초에서 429로 돌려보낸다. 무한 대기는 전부 timeout이 되므로 금지.
 	maxQueueWait = 45 * time.Second
 )
 
-// ipfsUploadTimeout은 Kubo add + pin 상한이다 (PRD BE-10, SEC-11). 초과하면 결과는 그대로 반환하고 cid는 null이다.
+// ipfsUploadTimeout은 Kubo add + pin 상한이다. 초과하면 결과는 그대로 반환하고 cid는 null이다.
 // 테스트가 짧게 바꿔 timeout 경로를 빠르게 확인할 수 있도록 var로 둔다 (운영 코드는 바꾸지 않는다).
 var ipfsUploadTimeout = 10 * time.Second
 
-// ipfsGatewayURL은 응답 ipfs_url의 앞부분이다. Ingress로 노출한 Kubo gateway host다 (F-M3-03).
+// ipfsGatewayURL은 응답 ipfs_url의 앞부분이다. Ingress로 노출한 Kubo gateway host다.
 const ipfsGatewayURL = "http://ipfs.lgtm.local/ipfs/"
 
 // InitMetrics는 lgtm_executions의 모든 status series와 lgtm_queue_rejected를 0으로 시작시킨다 (운영 기동 시 1회).
@@ -64,7 +64,7 @@ func InitMetrics(m *telemetry.Metrics) {
 		wasmexec.StatusRuntimeError, wasmexec.StatusTimeout, wasmexec.StatusMemoryLimit})
 }
 
-// NewLimiter는 PRD 기준(처리 2 + 대기 8, 대기 상한 45초)의 Limiter를 만든다.
+// NewLimiter는 처리 2 + 대기 8, 대기 상한 45초의 Limiter를 만든다.
 func NewLimiter() *limiter.Limiter { return limiter.New(maxActive, maxWaiting, maxQueueWait) }
 
 // Uploader는 파일들을 IPFS 디렉토리로 올리고 CID를 돌려준다. 운영에서는 *ipfs.Client, 테스트에서는 가짜를 넣는다.
@@ -88,7 +88,7 @@ type timings struct {
 	IPFSUpload int64 `json:"ipfs_upload"`
 }
 
-// response는 PRD 6.2 스키마. 성공/실패 모두 같은 구조체를 쓰고 message만 생략 가능하다.
+// response는 POST /api/execute 응답 스키마. 성공/실패 모두 같은 구조체를 쓰고 message만 생략 가능하다.
 type response struct {
 	Status    string  `json:"status"`
 	Message   string  `json:"message,omitempty"`
@@ -233,8 +233,8 @@ func (h *handler) compile(ctx context.Context, root trace.Span, code string, res
 	return nil, false
 }
 
-// upload는 ipfs.upload 단계다. 실패한 실행도 업로드한다 (BE-05). 업로드 실패/timeout은 부분 실패다: ipfs.upload span만 ERROR로 두고
-// 응답 status와 root span은 실행 결과 그대로 유지하며 cid/ipfs_url은 null이다 (BE-10). 코드 원문은 로그에 남기지 않는다.
+// upload는 ipfs.upload 단계다. 실패한 실행도 업로드한다. 업로드 실패/timeout은 부분 실패다: ipfs.upload span만 ERROR로 두고
+// 응답 status와 root span은 실행 결과 그대로 유지하며 cid/ipfs_url은 null이다. 코드 원문은 로그에 남기지 않는다.
 func (h *handler) upload(ctx context.Context, root trace.Span, code string, exitCode *int, resp *response) {
 	files := buildFiles(code, *resp, exitCode)
 	var cid string
@@ -270,7 +270,7 @@ func (h *handler) writeResult(ctx context.Context, w http.ResponseWriter, root t
 }
 
 // step은 자식 span 하나를 만들고 fn을 실행한다.
-// fn이 error를 반환하면 span을 ERROR로 표시하고 분류형 문구를 event로 남긴다 (TR-02).
+// fn이 error를 반환하면 span을 ERROR로 표시하고 분류형 문구를 event로 남긴다.
 // span/event/로그에는 err.Error()를 쓰지 않는다. 사용자 입력(rustc 메시지, panic 메시지)이 섞여 있을 수 있기 때문이다.
 func (h *handler) step(ctx context.Context, name string, kind trace.SpanKind, fn func(context.Context, trace.Span) error) (int64, error) {
 	ctx, span := h.tracer.Start(ctx, name, trace.WithSpanKind(kind))
@@ -330,7 +330,7 @@ func (h *handler) queueRejected(ctx context.Context, w http.ResponseWriter, root
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "queue_full", "message": "서버가 바쁩니다. 잠시 후 다시 시도하세요", "trace_id": root.SpanContext().TraceID().String()})
 }
 
-// execute는 execute 단계를 실행해 resp를 채우고 종료 코드(실행 결과가 없으면 nil)를 돌려준다. TR-04 attribute(exec.*)는 성공/실패 모두 execute span에 남긴다.
+// execute는 execute 단계를 실행해 resp를 채우고 종료 코드(실행 결과가 없으면 nil)를 돌려준다. exec.* attribute는 성공/실패 모두 execute span에 남긴다.
 // 실패(success가 아닌 모든 status)면 execute span과 root span을 ERROR로 표시한다.
 func (h *handler) execute(ctx context.Context, root trace.Span, wasm []byte, resp *response) *int {
 	rootCtx := ctx

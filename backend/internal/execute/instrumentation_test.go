@@ -75,7 +75,7 @@ func TestFailureClassesHaveNoUserStrings(t *testing.T) {
 		{"memory_limit", nil, &fakeExec{res: wasmexec.Result{Status: wasmexec.StatusMemoryLimit, Message: "memory limit exceeded", Class: "memory limit exceeded", ExitCode: -1}}, nil,
 			"memory_limit", "memory limit exceeded", []string{"POST /api/execute", "execute"}},
 		{"executor_internal", nil, &fakeExec{err: errors.New("engine failure")}, nil, "internal_error", "internal error [execute]", []string{"POST /api/execute", "execute"}},
-		// 업로드 실패는 ipfs.upload 만 ERROR (F-M3-02 해석 유지)
+		// 업로드 실패는 ipfs.upload 만 ERROR
 		{"upload_5xx", nil, nil, &fakeUploader{err: &ipfs.StatusError{Code: 503, Body: "kubo"}}, "success", "ipfs upload failed [http_5xx]", []string{"ipfs.upload"}},
 		{"upload_4xx", nil, nil, &fakeUploader{err: &ipfs.StatusError{Code: 400, Body: "kubo"}}, "success", "ipfs upload failed [http_4xx]", []string{"ipfs.upload"}},
 		{"upload_timeout", nil, nil, &fakeUploader{err: context.DeadlineExceeded}, "success", "ipfs upload failed [timeout]", []string{"ipfs.upload"}},

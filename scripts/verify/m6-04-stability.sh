@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# F-M6-04 stability 검증. Debian VM(Linux)에서만 실행한다.
+# stability 검증. Debian VM(Linux)에서만 실행한다.
 # 전제: make build deploy 가 끝난 상태. JSON 파싱은 python3 표준 라이브러리만 쓴다.
-# deployment 를 rollout restart 하는 동안 Ingress(Traefik) 경유로 1초 간격 요청을 보내 non-200 이 0건인지 본다 (PRD 12장 "배포 직후 504").
+# deployment 를 rollout restart 하는 동안 Ingress(Traefik) 경유로 1초 간격 요청을 보내 non-200 이 0건인지 본다 ("배포 직후 504" 재발 방지).
 #   backend  : POST /api/execute 60건 (+ 재시작 때 처리 중이던 loop {} 1건이 끝까지 완료되는지)
 #   compiler : 같은 요청 60건. backend→compiler keep-alive 가 끊기면 HTTP 200 + status=internal_error 로 나타나므로 본문 status 도 본다
 #   frontend : GET / 30건
