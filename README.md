@@ -1,4 +1,4 @@
-*This project has been created as part of the 42 curriculum by taebkim.*
+*This project has been created as part of the 42 curriculum by taebkim, yuhyoon.*
 
 # LGTM — Looks Good To Monitor
 
