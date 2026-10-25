@@ -57,7 +57,7 @@ After the install, open a new terminal and then run `make`.
 
 Start over: `make fclean` removes the cluster, the locally built images and the `/etc/hosts` block; `make re` does `fclean` and then `make`.
 
-After a VM reboot: `make install` enables Docker at boot, and `scripts/verify/m6-02-fresh-vm.sh` checks the restart policy of the k3d node containers. Log in after the reboot and run `scripts/tools/reboot-check.sh`; it passes when all pods are Running and `lgtm.local` answers 200 within 3 minutes of boot (fresh-VM result: TBD).
+After a VM reboot: `make install` enables Docker at boot, and `scripts/verify/m6-02-fresh-vm.sh` checks the restart policy of the k3d node containers. Log in after the reboot and run `scripts/tools/reboot-check.sh`; it passes when all pods are Running and `lgtm.local` answers 200 within 3 minutes of boot (verified on a separate VirtualBox amd64 VM, 2026-10-25).
 
 ### Addresses (open them in Firefox **inside the VM**)
 
@@ -276,7 +276,6 @@ Iterating after a code change: `make build deploy` is enough; `make re` is only 
 - **NAT / public gateways:** see [IPFS and NAT](#ipfs-and-nat). Public IPFS access is not available behind NAT without port forwarding, and `ipfs.io` no longer answers plain HTTP requests.
 - **A new cluster shows `NaN` / empty p95 panels at first:** `rate()` needs at least two samples per histogram series, so the panels fill in after a second batch of requests (about 20 seconds later).
 - **Longest duration panel lags** by roughly 50 seconds (TraceQL metrics, one measurement).
-- **Full `make verify` on a fresh VM:** not yet confirmed as one run; it is planned for F-M6-02. The checks have so far been run per feature.
 - First `make` needs internet access to pull images and packages; image pulls are retried (`scripts/images/prefetch-images.sh`).
 
 ## Resources

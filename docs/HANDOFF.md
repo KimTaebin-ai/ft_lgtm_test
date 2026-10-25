@@ -38,12 +38,10 @@
 
 ### 된 것
 - 로컬 정적 검사만 했다. 변경한 스크립트는 `bash -n`과 `shellcheck -S warning`에서 문제가 없었다(rc 0). `make -n all/sudo-auth/install/hosts/fclean/re/verify/clean`도 모두 됐다. hosts.sh는 임시 파일로 추가 → skip → 제거 → skip을 확인했다.
+- 클러스터 PC VirtualBox(amd64) VM에서 2부 Step 1~7 통과(사용자 실행, 2026-10-25). 그 VM의 첫 make는 625359a 이전 main으로 실행했고, git pull 후 625359a로 make, make verify(m0-01/m0-02/m6-02 포함), 재부팅 확인, make 재실행, make re까지 통과.
 
-### 안 된 것 (클러스터 PC VirtualBox(amd64)에서 Step 1~7 통과(사용자 실행, 2026-10-25))
-- m6-02 FAIL 확인(cab1ee2 기준), `make` 소요 시간, `make verify` 전체, 재부팅 후 3분 안에 회복, `make` 재실행, `make re`, Firefox 한글 표시.
-- k3d 노드 컨테이너 restart policy(`docker inspect`): 새 VM 결과를 받으면 여기에 적는다. m6-02 9번이 always 또는 unless-stopped인지 검사한다.
-- inbrowser.link에서 실제로 열리는지는 측정하지 않았다.
-- vitest(ResultView.test.tsx)는 새 VM의 `make build`(frontend Dockerfile) 안에서 실행된다. 로컬에는 node_modules가 없어서 돌리지 않았다.
+### 안 된 것 (사용자가 새 VM에서 실행 → 결과 대기)
+- 빈 VM에서 625359a로 첫 make는 미확인(최종 리허설에서 확인 예정)
 
 ### 다음 단계
 - 사용자 결과로 README의 소요 시간과 재부팅 결과 `TBD`를 채우고, Known limitations의 "Full `make verify` on a fresh VM" 줄을 갱신한다.
