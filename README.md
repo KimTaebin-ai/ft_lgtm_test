@@ -46,14 +46,14 @@ Requirements: a user that can run `sudo`, and Internet access for the first `mak
 Inside the VM:
 
 ```bash
-sudo apt install -y make git
+sudo apt install -y make git fonts-noto-cjk
 git clone <this repository> lgtm && cd lgtm
 make
 ```
 
-`make` asks for the sudo password **once, right at the start**, and then runs `install`, `hosts`, `cluster`, `build` and `deploy` in that order. All sudo use (apt, Docker, the binaries in `/usr/local/bin`, `/etc/hosts`) happens in `install` and `hosts`, well inside sudo's 15-minute timestamp, so it does not ask again later. It installs Docker, kubectl, Helm, k3d and the Korean font `fonts-noto-cjk` at pinned versions, writes the host names to the VM's `/etc/hosts`, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), and deploys observability → IPFS → app. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe (if the sudo timestamp has expired it asks for the password once more). The run ends with `ingress ready: lgtm.local`.
+After the install, open a new terminal and then run `make`.
 
-Expected duration on a fresh VM: TBD (to be measured on a fresh VM).
+`make` asks for the sudo password **once, right at the start**, and then runs `install`, `hosts`, `cluster`, `build` and `deploy` in that order. All sudo use (apt, Docker, the binaries in `/usr/local/bin`, `/etc/hosts`) happens in `install` and `hosts`, well inside sudo's 15-minute timestamp, so it does not ask again later. It installs Docker, kubectl, Helm, k3d and the Korean font `fonts-noto-cjk` at pinned versions, writes the host names to the VM's `/etc/hosts`, creates the k3d cluster, builds the `backend`, `compiler` and `frontend` images locally and imports them into k3d (nothing is pushed to a registry), and deploys observability → IPFS → app. No re-login is needed after Docker is installed. Every target is idempotent, so running `make` again is safe (if the sudo timestamp has expired it asks for the password once more). The run ends with `ingress ready: lgtm.local`.
 
 Start over: `make fclean` removes the cluster, the locally built images and the `/etc/hosts` block; `make re` does `fclean` and then `make`.
 

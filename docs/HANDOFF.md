@@ -39,7 +39,7 @@
 ### 된 것
 - 로컬 정적 검사만 했다. 변경한 스크립트는 `bash -n`과 `shellcheck -S warning`에서 문제가 없었다(rc 0). `make -n all/sudo-auth/install/hosts/fclean/re/verify/clean`도 모두 됐다. hosts.sh는 임시 파일로 추가 → skip → 제거 → skip을 확인했다.
 
-### 안 된 것 (사용자가 새 VM에서 실행 → 결과 대기)
+### 안 된 것 (클러스터 PC VirtualBox(amd64)에서 Step 1~7 통과(사용자 실행, 2026-10-25))
 - m6-02 FAIL 확인(cab1ee2 기준), `make` 소요 시간, `make verify` 전체, 재부팅 후 3분 안에 회복, `make` 재실행, `make re`, Firefox 한글 표시.
 - k3d 노드 컨테이너 restart policy(`docker inspect`): 새 VM 결과를 받으면 여기에 적는다. m6-02 9번이 always 또는 unless-stopped인지 검사한다.
 - inbrowser.link에서 실제로 열리는지는 측정하지 않았다.
