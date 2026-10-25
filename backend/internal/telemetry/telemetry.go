@@ -24,7 +24,7 @@ import (
 const (
 	// ServiceName은 backend의 service.name이자 metric meter 이름이다.
 	ServiceName = "lgtm-backend"
-	// CompilerServiceName은 compiler pod의 service.name (F-M2-01).
+	// CompilerServiceName은 compiler pod의 service.name.
 	CompilerServiceName = "lgtm-compiler"
 	defaultEndpoint     = "otel-collector.observability:4317"
 

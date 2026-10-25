@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-// Violation은 deny-list에 걸린 규칙이다 (F-M2-02). 소스 줄 내용은 담지 않는다 (응답으로 되돌려 보내지 않기 위해).
+// Violation은 deny-list에 걸린 규칙이다. 소스 줄 내용은 담지 않는다 (응답으로 되돌려 보내지 않기 위해).
 type Violation struct {
 	Rule string
 	Line int

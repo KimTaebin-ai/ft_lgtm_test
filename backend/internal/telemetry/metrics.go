@@ -9,7 +9,7 @@ import (
 )
 
 // OTel instrument 이름에는 접미사를 붙이지 않는다. Collector의 prometheus_remote_write가
-// counter에 _total, unit "s"에 _seconds를 붙여 Mimir에는 PRD 8.2 이름으로 저장된다.
+// counter에 _total, unit "s"에 _seconds를 붙여 Mimir에는 아래 이름으로 저장된다.
 //
 //	lgtm_executions          → lgtm_executions_total
 //	lgtm_execution_duration  → lgtm_execution_duration_seconds_{bucket,sum,count}
@@ -28,14 +28,14 @@ const (
 	MetricQueueWaiting      = "lgtm_queue_waiting"
 )
 
-// DurationBuckets는 PRD 8.2: 5초 limit 근처를 촘촘하게. 두 histogram이 공통으로 쓴다.
+// DurationBuckets는 5초 실행 limit 근처를 촘촘하게. 두 histogram이 공통으로 쓴다.
 var DurationBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 4.5, 5, 5.5, 10, 20}
 
-// OutputBuckets는 lgtm_output_bytes의 bucket이다 (PRD 8.2 "권장" 항목이라 수치는 PRD에 없다).
+// OutputBuckets는 lgtm_output_bytes의 bucket이다.
 // stdout+stderr 합계 상한이 10kB(10240)라 상한이 별도 경계가 되도록 했다. 잘린 출력은 le=10240에 모인다.
 var OutputBuckets = []float64{128, 512, 1024, 2048, 4096, 8192, 10240, 16384}
 
-// Metrics는 PRD 8.2 instrument 묶음. label에는 CID/hash 같은 high-cardinality 값을 넣지 않는다.
+// Metrics는 lgtm_* instrument 묶음. label에는 CID/hash 같은 high-cardinality 값을 넣지 않는다.
 type Metrics struct {
 	executions metric.Int64Counter
 	execDur    metric.Float64Histogram

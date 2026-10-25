@@ -9,7 +9,7 @@ import (
 	"lgtm/backend/internal/telemetry"
 )
 
-// 단계 실패 에러와 span 문구 규칙 (TR-02).
+// 단계 실패 에러와 span 문구 규칙.
 // span status / error event / 로그에는 telemetry.Classified의 SpanMessage()(분류형 문구)만 쓴다.
 // Error()는 사용자 입력(rustc 메시지, panic 메시지)이 섞일 수 있어 응답과 IPFS 결과에만 쓴다.
 // userError와 execFailure는 사용자 입력 유래라 Error()를 로그에도 쓰지 않는다 (failClass의 userDerived).

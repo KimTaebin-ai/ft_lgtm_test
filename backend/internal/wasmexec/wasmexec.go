@@ -1,12 +1,12 @@
-// Package wasmexec는 compile이 만든 wasm을 wasmtime-go로 실행한다 (PRD 7.1 SEC-01~05).
+// Package wasmexec는 compile이 만든 wasm을 wasmtime-go로 sandbox 실행한다.
 //
 // 요청마다 Store를 새로 만들고 Engine/Linker는 공유한다.
-//   - capability 0: preopen 없음, 환경변수 없음, argv는 프로그램 이름 하나, stdin 없음, socket 없음 (SEC-01, 02).
-//   - memory: Store.Limiter로 10MiB (SEC-03).
+//   - capability 0: preopen 없음, 환경변수 없음, argv는 프로그램 이름 하나, stdin 없음, socket 없음.
+//   - memory: Store.Limiter로 10MiB.
 //   - time: epoch interruption. Engine 전체에 하나뿐인 ticker가 epoch를 올리고, Store마다 deadline을 둔다.
-//     IncrementEpoch는 Engine 전체에 적용되므로 요청마다 타이머로 올리면 동시에 실행 중인 다른 요청이 끊긴다 (SEC-04).
+//     IncrementEpoch는 Engine 전체에 적용되므로 요청마다 타이머로 올리면 동시에 실행 중인 다른 요청이 끊긴다.
 //   - output: wasmtime-go의 stdout/stderr는 파일 경로(SetStdoutFile)뿐이라 디스크에 무제한 쓸 수 있다.
-//     그래서 wasi_snapshot_preview1.fd_write를 Go 함수로 shadowing해 fd 1, 2를 메모리 버퍼로만 받는다 (SEC-05).
+//     그래서 wasi_snapshot_preview1.fd_write를 Go 함수로 shadowing해 fd 1, 2를 메모리 버퍼로만 받는다.
 package wasmexec
 
 import (
@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	// MemoryLimit은 SEC-03: 모듈 메모리 상한 10MiB.
+	// MemoryLimit은 모듈 메모리 상한 10MiB.
 	MemoryLimit = 10 << 20
-	// Timeout은 SEC-04의 wall-clock 상한이다.
+	// Timeout은 실행 wall-clock 상한이다.
 	Timeout = 5 * time.Second
-	// OutputLimit은 SEC-05: stdout+stderr 합계 상한.
+	// OutputLimit은 stdout+stderr 합계 상한.
 	OutputLimit = 10240
 
 	// tick마다 전역 epoch를 1 올린다. deadline은 Timeout/tick + 1 이다.

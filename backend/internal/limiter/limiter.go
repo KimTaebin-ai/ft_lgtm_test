@@ -1,4 +1,4 @@
-// Package limiter는 동시 처리 수 제한과 대기열이다 (PRD BE-09, SEC-07, SEC-08).
+// Package limiter는 동시 처리 수 제한과 대기열이다.
 // 처리 슬롯(채널)과 대기 카운터로 구성되며, 대기열이 가득 차면 기다리지 않고 즉시 거절한다.
 package limiter
 
